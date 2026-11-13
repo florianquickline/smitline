@@ -7,6 +7,11 @@ from startup_input import clip_tokens
 OUTCOMES = ('achieved', 'partial', 'not_reached', 'voicemail', 'declined', 'failed', 'canceled')
 RESPONSES_URL = 'https://api.openai.com/v1/responses'
 DEFAULT_SUMMARY_MODEL = 'gpt-5.6-luna'
+# Calls on Claude (SMITLINE_PHONE_ENGINE=claude) are summarized by Claude too.
+CLAUDE_SUMMARY_MODEL = 'claude-haiku-5-5'
+CLAUDE_SUMMARY_EFFORT = 'medium'
+CLAUDE_SUMMARY_MAX_TOKENS = 16000
+CLAUDE_SUMMARY_TIMEOUT_SECONDS = 90.0
 MAX_TRANSCRIPT_CHARS = 40000
 MAX_ITEMS = 20
 
@@ -316,6 +321,38 @@ def output_text(response):
     raise SummaryUnavailable('the summary model returned no text')
 
 
+# Claude writes the result in the language the brief is written in: a call in German about a
+# brief in German gets a German summary.
+SUMMARY_LANGUAGE = (
+    ' Write summary, details, decisions, actionItems and openQuestions in the language the '
+    'brief is written in.'
+)
+
+
+def summary_instructions(brief):
+    return MEETING_SUMMARY_INSTRUCTIONS if brief.get('channel') == 'meeting' else SUMMARY_INSTRUCTIONS
+
+
+def summary_input(brief, transcript, facts=()):
+    """What the summary model reads: the brief, Smitline's facts (meeting_facts) and the
+    transcript."""
+    meeting = brief.get('channel') == 'meeting'
+    known = ''.join(f'\n- {fact}' for fact in facts or ())
+    return (brief_text(brief) + (f'\n\nFacts from Smitline:{known}' if known else '')
+            + '\n\nTranscript:\n'
+            + transcript_text(transcript, others='Participants' if meeting else 'Other party'))
+
+
+def summary_result(data, brief, transcript, duration_seconds):
+    """The call result from the summary model's JSON (RESULT_SCHEMA)."""
+    return build_result(
+        outcome=data.get('outcome'), summary=data.get('summary'), transcript=transcript,
+        details=data.get('details'), decisions=data.get('decisions'),
+        action_items=data.get('actionItems'), open_questions=data.get('openQuestions'),
+        duration_seconds=duration_seconds, source='summary_model',
+        do_not_call=data.get('doNotCall') if brief.get('channel') != 'meeting' else False)
+
+
 class ResponsesSummarizer:
     def __init__(self, api_key, *, model=DEFAULT_SUMMARY_MODEL, post=None):
         if not api_key:
@@ -338,15 +375,11 @@ class ResponsesSummarizer:
     def request(self, brief, transcript, facts=()):
         """facts: sentences from Smitline about the call that the transcript cannot show
         (meeting_facts)."""
-        meeting = brief.get('channel') == 'meeting'
-        known = ''.join(f'\n- {fact}' for fact in facts or ())
         return {
             'model': self.model,
             'store': False,
-            'instructions': MEETING_SUMMARY_INSTRUCTIONS if meeting else SUMMARY_INSTRUCTIONS,
-            'input': (brief_text(brief) + (f'\n\nFacts from Smitline:{known}' if known else '')
-                      + '\n\nTranscript:\n'
-                      + transcript_text(transcript, others='Participants' if meeting else 'Other party')),
+            'instructions': summary_instructions(brief),
+            'input': summary_input(brief, transcript, facts),
             'text': {'format': {'type': 'json_schema', 'name': 'call_result',
                                 'strict': True, 'schema': RESULT_SCHEMA}},
         }
@@ -358,16 +391,67 @@ class ResponsesSummarizer:
         except (TypeError, ValueError) as error:
             raise SummaryUnavailable('the summary model returned invalid JSON') from error
         usage = (response or {}).get('usage') or {}
-        result = build_result(
-            outcome=data.get('outcome'), summary=data.get('summary'), transcript=transcript,
-            details=data.get('details'), decisions=data.get('decisions'),
-            action_items=data.get('actionItems'), open_questions=data.get('openQuestions'),
-            duration_seconds=duration_seconds, source='summary_model',
-            do_not_call=data.get('doNotCall') if brief.get('channel') != 'meeting' else False)
+        result = summary_result(data, brief, transcript, duration_seconds)
         result['summaryTokens'] = {
             'input': int(usage.get('input_tokens') or 0),
             'cached': int((usage.get('input_tokens_details') or {}).get('cached_tokens') or 0),
             'output': int(usage.get('output_tokens') or 0),
+        }
+        result['summaryModel'] = self.model
+        return result
+
+
+class ClaudeSummarizer:
+    """Writes the result with Claude: the brief and transcript as one user turn, and the answer
+    as JSON that structured outputs hold to RESULT_SCHEMA."""
+
+    def __init__(self, api_key=None, *, model=CLAUDE_SUMMARY_MODEL, client=None):
+        if client is None:
+            if not (api_key or '').strip():
+                raise SummaryUnavailable('ANTHROPIC_API_KEY is not configured')
+            import anthropic
+            client = anthropic.AsyncAnthropic(api_key=api_key.strip(),
+                                              timeout=CLAUDE_SUMMARY_TIMEOUT_SECONDS)
+        self.client = client
+        self.model = model
+
+    def request(self, brief, transcript, facts=()):
+        return {
+            'model': self.model,
+            'max_tokens': CLAUDE_SUMMARY_MAX_TOKENS,
+            'system': summary_instructions(brief) + SUMMARY_LANGUAGE,
+            'messages': [{'role': 'user', 'content': summary_input(brief, transcript, facts)}],
+            'output_config': {'effort': CLAUDE_SUMMARY_EFFORT,
+                              'format': {'type': 'json_schema', 'schema': RESULT_SCHEMA}},
+        }
+
+    async def summarize(self, brief, transcript, *, duration_seconds=0, facts=()):
+        import anthropic
+        from claude_brain import failure_code
+        try:
+            message = await self.client.messages.create(**self.request(brief, transcript, facts))
+        except anthropic.APIError as error:
+            raise SummaryUnavailable(f'summary request failed ({failure_code(error)})') from error
+        if message.stop_reason == 'refusal':
+            raise SummaryUnavailable('Claude declined to summarize the call')
+        if message.stop_reason == 'max_tokens':
+            raise SummaryUnavailable('the summary was cut off')
+        text = next((block.text for block in message.content if block.type == 'text'), '')
+        try:
+            data = json.loads(text)
+        except (TypeError, ValueError) as error:
+            raise SummaryUnavailable('the summary model returned invalid JSON') from error
+        if not isinstance(data, dict):
+            raise SummaryUnavailable('the summary model returned invalid JSON')
+        result = summary_result(data, brief, transcript, duration_seconds)
+        usage = message.usage
+        cached = int(getattr(usage, 'cache_read_input_tokens', 0) or 0)
+        result['summaryTokens'] = {
+            # Cache reads and writes are input too; call_costs prices the reads lower.
+            'input': (int(getattr(usage, 'input_tokens', 0) or 0) + cached
+                      + int(getattr(usage, 'cache_creation_input_tokens', 0) or 0)),
+            'cached': cached,
+            'output': int(getattr(usage, 'output_tokens', 0) or 0),
         }
         result['summaryModel'] = self.model
         return result

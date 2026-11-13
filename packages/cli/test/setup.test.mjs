@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
-  accountFields, availableVoices, containerRegistration, createSignalWireTrunk, localMcpConnection, missingForDone, parseEnv, readEnv, registerAgents, removeSetting, renderSecretsPage, sanitizeSubmission,
+  accountFields, availableVoices, containerRegistration, createSignalWireTrunk, localMcpConnection, meetingsOn, missingForDone, parseEnv, phoneEngine, readEnv, registerAgents, removeSetting, renderSecretsPage, sanitizeSubmission,
   serveSecretsPage, setupStatus, validateSetting, windowsProfile, writeEnv, SETUP_PAGE_PORT, setupPagePort, colleagueVersion,
 } from '../src/setup.mjs';
 
@@ -126,13 +126,13 @@ test('secrets page submission is validated and never echoes secrets', async (t) 
   assert.match(first, /name="action" value="done"/);
 
   // Each save keeps the page open for more.
-  const saved = await postForm(pageUrl, { OPENAI_API_KEY: 'sk-live', SMITLINE_OWNER_NAME: 'Robin' });
+  const saved = await postForm(pageUrl, { ANTHROPIC_API_KEY: 'sk-ant-live', DEEPGRAM_API_KEY: 'dg-live', SMITLINE_OWNER_NAME: 'Robin' });
   assert.equal(saved.status, 200);
   const afterSave = await saved.text();
   assert.match(afterSave, /Saved on this computer/);
-  assert.match(afterSave, /OpenAI API key and Your name/);
-  assert.ok(!afterSave.includes('sk-live'));
-  assert.equal(readEnv(root).OPENAI_API_KEY, 'sk-live');
+  assert.match(afterSave, /Anthropic API key, Deepgram API key, and Your name/);
+  assert.ok(!afterSave.includes('sk-ant-live') && !afterSave.includes('dg-live'));
+  assert.equal(readEnv(root).ANTHROPIC_API_KEY, 'sk-ant-live');
 
   // A field that needs a fix does not throw away the valid ones next to it.
   const partial = await postForm(pageUrl, { TWILIO_ACCOUNT_SID: 'AC-secret-sid', SMITLINE_OWNER_PHONE: 'nope' });
@@ -144,16 +144,16 @@ test('secrets page submission is validated and never echoes secrets', async (t) 
   assert.equal(readEnv(root).TWILIO_ACCOUNT_SID, 'AC-secret-sid');
 
   // Done refuses to finish while a phone provider is half set up, and keeps what was typed.
-  const refused = await postForm(pageUrl, { OPENAI_API_KEY: 'sk-newer', SMITLINE_OWNER_PHONE: '+14155550142', action: 'done' });
+  const refused = await postForm(pageUrl, { ANTHROPIC_API_KEY: 'sk-ant-newer', SMITLINE_OWNER_PHONE: '+14155550142', action: 'done' });
   assert.equal(refused.status, 422);
   assert.match(await refused.text(), /Twilio Auth Token is required for Twilio phone calls/);
-  assert.equal(readEnv(root).OPENAI_API_KEY, 'sk-newer');
+  assert.equal(readEnv(root).ANTHROPIC_API_KEY, 'sk-ant-newer');
   // Done saves what was typed, shows the closing page, and reports every key once.
   const finished = await postForm(pageUrl, { TWILIO_AUTH_TOKEN: 'tok\n en', action: 'done' });
   assert.equal(finished.status, 200);
   assert.match(await finished.text(), /All set/);
-  assert.deepEqual(await done, { saved: ['OPENAI_API_KEY', 'SMITLINE_OWNER_NAME', 'TWILIO_ACCOUNT_SID', 'SMITLINE_OWNER_PHONE', 'TWILIO_AUTH_TOKEN'] });
-  assert.deepEqual(savedEvents, [['OPENAI_API_KEY', 'SMITLINE_OWNER_NAME'], ['TWILIO_ACCOUNT_SID'], ['OPENAI_API_KEY', 'SMITLINE_OWNER_PHONE'], ['TWILIO_AUTH_TOKEN']]);
+  assert.deepEqual(await done, { saved: ['ANTHROPIC_API_KEY', 'DEEPGRAM_API_KEY', 'SMITLINE_OWNER_NAME', 'TWILIO_ACCOUNT_SID', 'SMITLINE_OWNER_PHONE', 'TWILIO_AUTH_TOKEN'] });
+  assert.deepEqual(savedEvents, [['ANTHROPIC_API_KEY', 'DEEPGRAM_API_KEY', 'SMITLINE_OWNER_NAME'], ['TWILIO_ACCOUNT_SID'], ['ANTHROPIC_API_KEY', 'SMITLINE_OWNER_PHONE'], ['TWILIO_AUTH_TOKEN']]);
   assert.equal(readEnv(root).TWILIO_AUTH_TOKEN, 'token');
   const closed = await fetch(pageUrl).then((response) => response.status, () => 'closed');
   assert.ok([410, 'closed'].includes(closed), String(closed));
@@ -234,7 +234,11 @@ test('status reports what to ask the user, and verifies keys when present', asyn
   const empty = await setupStatus({ root, env: {}, verify: false, runner, find });
   assert.equal(empty.ready, false);
   assert.equal(empty.firstCallReady, false);
-  assert.deepEqual(empty.next.slice(0, 2).map((item) => item.id), ['openai_key', 'owner_name']);
+  // Calls run on Claude: Anthropic and Deepgram first, and no OpenAI key unless meetings are on.
+  assert.deepEqual(empty.next.slice(0, 3).map((item) => item.id), ['anthropic_key', 'deepgram_key', 'owner_name']);
+  assert.ok(!empty.checks.some((c) => c.id === 'openai_key'));
+  const meetings = await setupStatus({ root, env: { SMITLINE_MEETINGS: '1' }, verify: false, runner, find });
+  assert.ok(meetings.next.some((item) => item.id === 'openai_key'));
   // Until the user opts into phone calls, only that question is a next step.
   assert.ok(empty.next.some((item) => item.id === 'phone_account'));
   assert.ok(!empty.next.some((item) => ['caller_id', 'owner_phone', 'public_url'].includes(item.id)));
@@ -261,7 +265,7 @@ test('status reports what to ask the user, and verifies keys when present', asyn
     return Response.json({ outgoing_caller_ids: [{ phone_number: '+14155550100' }] });
   };
   const envLines = [
-    'OPENAI_API_KEY=sk-test', 'SMITLINE_OWNER_NAME=Robin', 'TWILIO_ACCOUNT_SID=AC1',
+    'SMITLINE_PHONE_ENGINE=gpt-live', 'OPENAI_API_KEY=sk-test', 'SMITLINE_OWNER_NAME=Robin', 'TWILIO_ACCOUNT_SID=AC1',
     'TWILIO_AUTH_TOKEN=tok', 'SMITLINE_OWNER_PHONE=+14155550100',
   ];
   // No number chosen yet.
@@ -380,7 +384,7 @@ test('setup secrets starts the page in the background and prints its address', a
   const saved = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ OPENAI_API_KEY: 'sk-test', SMITLINE_OWNER_NAME: 'Robin', action: 'done' }).toString(),
+    body: new URLSearchParams({ ANTHROPIC_API_KEY: 'sk-ant-test', DEEPGRAM_API_KEY: 'dg-test', SMITLINE_OWNER_NAME: 'Robin', action: 'done' }).toString(),
   });
   assert.equal(saved.status, 200);
   assert.equal(readEnv(root).SMITLINE_OWNER_NAME, 'Robin');
@@ -592,13 +596,17 @@ test('the setup page offers SignalWire first and folds Twilio away', () => {
   assert.ok(!saved.includes('PT-very-secret'));
 });
 
-test('Done needs the OpenAI key and a complete SignalWire setup', () => {
-  assert.deepEqual(missingForDone({}), ['OpenAI API key is required', 'Your name is required']);
-  const base = { OPENAI_API_KEY: 'sk-live', SMITLINE_OWNER_NAME: 'Robin' };
+test('Done needs the keys of the voice in use and a complete SignalWire setup', () => {
+  assert.deepEqual(missingForDone({}), ['Anthropic API key is required', 'Deepgram API key is required', 'Your name is required']);
+  const base = { ANTHROPIC_API_KEY: 'sk-ant-live', DEEPGRAM_API_KEY: 'dg-live', SMITLINE_OWNER_NAME: 'Robin' };
   assert.deepEqual(missingForDone(base), []);
   assert.deepEqual(missingForDone({ ...base, SIGNALWIRE_SPACE: 'acme.signalwire.com', SIGNALWIRE_PROJECT_ID: 'p', SIGNALWIRE_SIGNING_KEY: 'PSK' }),
     ['API token is required for SignalWire phone calls']);
-  assert.deepEqual(missingForDone({ ...base, OPENAI_API_KEY: 'replace_with_your_project_api_key' }), ['OpenAI API key is required']);
+  assert.deepEqual(missingForDone({ ...base, ANTHROPIC_API_KEY: 'replace_with_your_api_key' }), ['Anthropic API key is required']);
+  // GPT-Live and meetings need the OpenAI key; calls on GPT-Live need nothing from Anthropic or Deepgram.
+  assert.deepEqual(missingForDone({ ...base, SMITLINE_MEETINGS: '1' }), ['OpenAI API key is required']);
+  assert.deepEqual(missingForDone({ SMITLINE_OWNER_NAME: 'Robin', SMITLINE_PHONE_ENGINE: 'gpt-live' }), ['OpenAI API key is required']);
+  assert.deepEqual(missingForDone({ SMITLINE_OWNER_NAME: 'Robin', SMITLINE_PHONE_ENGINE: 'gpt-live', OPENAI_API_KEY: 'sk-live' }), []);
 });
 
 test('sip-trunk creates the SignalWire script and SIP address OpenAI dials out through', async () => {
@@ -658,18 +666,29 @@ test('status says how call audio travels and what direct SIP still needs', async
   assert.throws(() => validateSetting('SMITLINE_SIP_PASSWORD', 'x'), /secret/);
 });
 
-test('calls on Claude take an engine setting and two secret keys, set together', () => {
+test('calls run on Claude unless the engine says GPT-Live, and meetings are a switch', () => {
   assert.equal(validateSetting('SMITLINE_PHONE_ENGINE', ' Claude '), 'claude');
   assert.equal(validateSetting('SMITLINE_PHONE_ENGINE', 'gpt-live'), 'gpt-live');
   assert.throws(() => validateSetting('SMITLINE_PHONE_ENGINE', 'deepgram'), /gpt-live, claude/);
   assert.throws(() => validateSetting('ANTHROPIC_API_KEY', 'sk-ant-x'), /secret/);
   assert.throws(() => validateSetting('DEEPGRAM_API_KEY', 'dg'), /secret/);
-  const base = { OPENAI_API_KEY: 'sk-test', SMITLINE_OWNER_NAME: 'Robin' };
-  assert.deepEqual(missingForDone({ ...base, ANTHROPIC_API_KEY: 'sk-ant-x' }),
-    ['Deepgram API key is required for Claude phone calls']);
-  assert.deepEqual(missingForDone({ ...base, ANTHROPIC_API_KEY: 'sk-ant-x', DEEPGRAM_API_KEY: 'dg' }), []);
+  assert.equal(phoneEngine({}), 'claude');
+  assert.equal(phoneEngine({ SMITLINE_PHONE_ENGINE: ' GPT-Live ' }), 'gpt-live');
+  assert.equal(validateSetting('SMITLINE_MEETINGS', '1'), '1');
+  assert.throws(() => validateSetting('SMITLINE_MEETINGS', 'yes'), /0 or 1/);
+  assert.equal(meetingsOn({}), false);
+  assert.equal(meetingsOn({ SMITLINE_MEETINGS: '1' }), true);
   const form = new URLSearchParams({ ANTHROPIC_API_KEY: ' sk-ant-api03-abc\n', SMITLINE_PHONE_ENGINE: 'claude' });
-  assert.deepEqual(sanitizeSubmission(form), { updates: { SMITLINE_PHONE_ENGINE: 'claude', ANTHROPIC_API_KEY: 'sk-ant-api03-abc' }, errors: [] });
+  assert.deepEqual(sanitizeSubmission(form), { updates: { ANTHROPIC_API_KEY: 'sk-ant-api03-abc', SMITLINE_PHONE_ENGINE: 'claude' }, errors: [] });
+  // The page marks the keys the chosen voice needs, and only those.
+  const badges = (html, key) => html.match(new RegExp(`for="${key}">[^<]*</label>(<span class="badge [a-z]+">)?`))[1] || '';
+  const page = renderSecretsPage({}, '/setup/x');
+  assert.match(badges(page, 'ANTHROPIC_API_KEY'), /required/);
+  assert.match(badges(page, 'DEEPGRAM_API_KEY'), /required/);
+  assert.equal(badges(page, 'OPENAI_API_KEY'), '');
+  const gptLive = renderSecretsPage({ SMITLINE_PHONE_ENGINE: 'gpt-live' }, '/setup/x');
+  assert.match(badges(gptLive, 'OPENAI_API_KEY'), /required/);
+  assert.equal(badges(gptLive, 'ANTHROPIC_API_KEY'), '');
 });
 
 test('profile commands and the new call flags reach the daemon', async (t) => {
@@ -782,7 +801,7 @@ async function listing(dir) {
 
 test('managed status skips host-only checks and says Smitline runs in its container', async (t) => {
   const root = await tempRoot(t);
-  await fs.writeFile(path.join(root, '.env'), 'OPENAI_API_KEY=sk-test\nSMITLINE_OWNER_NAME=Robin\n');
+  await fs.writeFile(path.join(root, '.env'), 'ANTHROPIC_API_KEY=sk-ant-test\nDEEPGRAM_API_KEY=dg-test\nOPENAI_API_KEY=sk-test\nSMITLINE_OWNER_NAME=Robin\nSMITLINE_MEETINGS=1\n');
   const ran = [];
   const runner = (binary, args) => { ran.push(`${binary} ${args.join(' ')}`); return fakeRunner({ 'docker info': 0 })(binary, args); };
   const status = await setupStatus({ root, env: {}, verify: false, runner, find: () => null, managed: true });
@@ -792,7 +811,7 @@ test('managed status skips host-only checks and says Smitline runs in its contai
   assert.equal(runtime.ok, true);
   assert.match(runtime.detail, /container/);
   assert.equal(status.checks.find((c) => c.id === 'docker').ok, true);
-  for (const kept of ['node', 'openai_key', 'owner_name', 'phone_account', 'caller_id', 'owner_phone', 'phone_audio', 'public_url', 'agents', 'daemon']) {
+  for (const kept of ['node', 'anthropic_key', 'deepgram_key', 'openai_key', 'owner_name', 'phone_account', 'caller_id', 'owner_phone', 'phone_audio', 'public_url', 'agents', 'daemon']) {
     assert.ok(ids.includes(kept), kept);
   }
   assert.ok(!ran.some((command) => command.startsWith('python3') || command.startsWith('claude') || command.startsWith('codex')));

@@ -3,7 +3,7 @@ import asyncio
 
 from briefing import EARLIER_CALLS_HEADING
 from call_brief import NEW_ROOM
-from call_hooks import LOCAL_OWNER, CallRefused, owner_settings, read_env_file
+from call_hooks import LOCAL_OWNER, MEETINGS_OFF, CallRefused, owner_settings, read_env_file
 import dial_in
 from meeting_lifecycle import AGENT_ENDINGS
 
@@ -190,8 +190,12 @@ class MeetingLine:
     channel = 'meeting'
 
     def __init__(self, daemon, *, poll_interval=2.0, handoff_timeout=120.0,
-                 sleep=asyncio.sleep, monotonic=None, transcript=None, pieces=None, phone=None):
+                 sleep=asyncio.sleep, monotonic=None, transcript=None, pieces=None, phone=None,
+                 enabled=None):
         self.daemon = daemon
+        # enabled(): whether new meetings may start (daemon_main passes call_hooks.meetings_on);
+        # meetings already running are still followed to their end.
+        self.enabled = enabled or (lambda: True)
         # The phone line, for meetings joined by their dial-in number (dial_in.py).
         self.phone = phone
         # transcript(meeting_id): the finished meeting's transcript entries, read from its archive.
@@ -212,6 +216,8 @@ class MeetingLine:
         return self.phone is not None and self.phone.session(call_id) is not None
 
     def ready(self, hooks, owner, brief):
+        if not self.enabled():
+            raise CallRefused('meetings_off', MEETINGS_OFF, status=503)
         credentials = lambda provider: hooks.credentials(owner, provider)  # noqa: E731
         if dial_in.way_in(self, owner_settings(hooks, owner), owner, brief, credentials,
                           hooks)[0] == 'phone':

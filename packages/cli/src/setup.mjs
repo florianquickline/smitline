@@ -27,10 +27,12 @@ export const SETTING_KEYS = Object.freeze([
   'SMITLINE_PHONE_AUDIO', 'SMITLINE_SIP_TRUNK_URL', 'SMITLINE_SIP_USERNAME', 'OPENAI_PROJECT_ID',
   'SMITLINE_CALLING_HOURS', 'SMITLINE_MAX_CALLS_PER_NUMBER', 'SMITLINE_MAX_CALLS_PER_HOUR',
   'SMITLINE_ALLOW_PREMIUM_NUMBERS', 'SMITLINE_MEETING_CAMERA_STYLE', 'SMITLINE_PHONE_ENGINE',
+  'SMITLINE_MEETINGS',
 ]);
 export const PHONE_AUDIO_MODES = Object.freeze(['relay', 'sip', 'sip-webhook']);
 // Who hears and speaks on phone calls (call_hooks.phone_engine): GPT-Live, or Deepgram and Claude.
 export const PHONE_ENGINES = Object.freeze(['gpt-live', 'claude']);
+const CLAUDE_KEYS = Object.freeze(['ANTHROPIC_API_KEY', 'DEEPGRAM_API_KEY']);
 export const CONNECTOR_PASSPHRASE_MIN = 12;
 export const GPT_LIVE_VOICES = Object.freeze([
   'marin', 'vesper', 'quartz', 'ripple', 'willow', 'stone', 'gleam', 'meridian', 'bossa',
@@ -47,6 +49,26 @@ export function phoneProvider(env) {
   const chosen = String(env.SMITLINE_PHONE_PROVIDER || '').trim().toLowerCase();
   if (['twilio', 'signalwire'].includes(chosen)) return chosen;
   return present(env.SIGNALWIRE_PROJECT_ID) && !present(env.TWILIO_ACCOUNT_SID) ? 'signalwire' : 'twilio';
+}
+
+/** 'claude' (the default: Deepgram hears and speaks, Claude answers) or 'gpt-live', chosen the
+ * same way as the daemon (call_hooks.phone_engine). */
+export function phoneEngine(env) {
+  const engine = String(env.SMITLINE_PHONE_ENGINE || '').trim().toLowerCase();
+  return PHONE_ENGINES.includes(engine) ? engine : 'claude';
+}
+
+/** Whether Smitline joins meetings: off unless SMITLINE_MEETINGS=1 (call_hooks.meetings_on). */
+export function meetingsOn(env) {
+  return ['1', 'true', 'yes', 'on'].includes(String(env.SMITLINE_MEETINGS || '').trim().toLowerCase());
+}
+
+/** The model keys this installation needs: Anthropic and Deepgram for calls on Claude, OpenAI
+ * for calls on GPT-Live or for meetings. */
+export function neededModelKeys(env) {
+  const keys = phoneEngine(env) === 'claude' ? [...CLAUDE_KEYS] : ['OPENAI_API_KEY'];
+  if (meetingsOn(env) && !keys.includes('OPENAI_API_KEY')) keys.push('OPENAI_API_KEY');
+  return keys;
 }
 
 /** The Space host from 'example', 'example.signalwire.com', or its https URL; '' if unusable. */
@@ -204,7 +226,7 @@ export function validateSetting(key, value, { env = process.env } = {}) {
   }
   if (['SMITLINE_ACCEPT_INBOUND', 'SMITLINE_RECORD_CALLS', 'SMITLINE_STREAM_REALTIME', 'SMITLINE_AUDIO_TRACE',
     'SMITLINE_MEETING_INTRO', 'SMITLINE_PHONE_WEB_SEARCH', 'SMITLINE_MEETING_WEB_SEARCH',
-    'SMITLINE_ALLOW_PREMIUM_NUMBERS'].includes(key)
+    'SMITLINE_ALLOW_PREMIUM_NUMBERS', 'SMITLINE_MEETINGS'].includes(key)
     && !['0', '1'].includes(text)) {
     throw new Error(`${key} must be 0 or 1`);
   }
@@ -415,13 +437,29 @@ export async function setupStatus({
     }));
   }
 
-  let openai = { ok: present(env.OPENAI_API_KEY) };
-  if (openai.ok && verify) openai = await verifyOpenAi(env.OPENAI_API_KEY, fetchImpl);
-  checks.push(check('openai_key', 'OpenAI API key with GPT-Live access', openai.ok, {
-    detail: openai.detail || (present(env.OPENAI_API_KEY) ? 'saved' : 'missing'),
-    ask: 'Please enter your OpenAI API key on the setup page I opened in your browser. Do not paste it into this chat.',
-    fix: openai.fix || 'smitline setup secrets',
-  }));
+  // Calls on Claude need Anthropic and Deepgram; GPT-Live and meetings need OpenAI.
+  const needed = neededModelKeys(env);
+  if (needed.includes('ANTHROPIC_API_KEY')) {
+    checks.push(check('anthropic_key', 'Anthropic API key (Claude answers on calls)', present(env.ANTHROPIC_API_KEY), {
+      detail: present(env.ANTHROPIC_API_KEY) ? 'saved' : 'missing',
+      ask: 'Please enter your Anthropic API key on the setup page I opened in your browser. Do not paste it into this chat.',
+      fix: 'smitline setup secrets',
+    }));
+    checks.push(check('deepgram_key', 'Deepgram API key (hears and speaks on calls)', present(env.DEEPGRAM_API_KEY), {
+      detail: present(env.DEEPGRAM_API_KEY) ? 'saved' : 'missing',
+      ask: 'Please enter your Deepgram API key on the setup page I opened in your browser. Do not paste it into this chat.',
+      fix: 'smitline setup secrets',
+    }));
+  }
+  if (needed.includes('OPENAI_API_KEY')) {
+    let openai = { ok: present(env.OPENAI_API_KEY) };
+    if (openai.ok && verify) openai = await verifyOpenAi(env.OPENAI_API_KEY, fetchImpl);
+    checks.push(check('openai_key', 'OpenAI API key with GPT-Live access', openai.ok, {
+      detail: openai.detail || (present(env.OPENAI_API_KEY) ? 'saved' : 'missing'),
+      ask: 'Please enter your OpenAI API key on the setup page I opened in your browser. Do not paste it into this chat.',
+      fix: openai.fix || 'smitline setup secrets',
+    }));
+  }
   checks.push(check('owner_name', 'Name to call on behalf of', present(env.SMITLINE_OWNER_NAME), {
     detail: present(env.SMITLINE_OWNER_NAME) ? env.SMITLINE_OWNER_NAME : 'missing',
     ask: "Please add your name on the setup page; every call opens with \"I'm calling on behalf of [your name]\".",
@@ -537,7 +575,8 @@ export async function setupStatus({
 
   const coreReady = checks.filter((c) => c.required).every((c) => c.ok === true);
   const phoneReady = coreReady && checks.filter((c) => c.group === 'phone' && c.id !== 'owner_phone').every((c) => c.ok === true);
-  const meetingsReady = coreReady && checks.find((c) => c.id === 'docker').ok === true;
+  // Meetings are off unless SMITLINE_MEETINGS=1 turns them on.
+  const meetingsReady = coreReady && meetingsOn(env) && checks.find((c) => c.id === 'docker').ok === true;
   // The first call rings the owner's phone; without phone setup it is a meeting instead.
   const firstCallReady = phoneReady && checks.find((c) => c.id === 'owner_phone').ok === true;
   // Phone steps become next steps once the user has started on phone calls; until then
@@ -650,7 +689,8 @@ const REVOKE = {
 
 // Also the field list of the console's Account page.
 export const FIELDS = [
-  { key: 'OPENAI_API_KEY', label: 'OpenAI API key', group: 'Required', secret: true, revoke: REVOKE.openai, hint: 'Starts with sk-. Create one at https://platform.openai.com/api-keys. The live voice needs billing turned on (a paid API tier).' },
+  { key: 'ANTHROPIC_API_KEY', label: 'Anthropic API key', group: 'Required', secret: true, hint: 'Starts with sk-ant-. Create one in the Claude Console under API keys. Claude answers on every call.' },
+  { key: 'DEEPGRAM_API_KEY', label: 'Deepgram API key', group: 'Required', secret: true, hint: 'Create one in the Deepgram console under API Keys. Deepgram hears the other person, Swiss German included, and speaks Claude’s answers.' },
   { key: 'SMITLINE_OWNER_NAME', label: 'Your name', group: 'Required', hint: 'Every call opens with: “Hi, I’m calling on behalf of [your name] about…”' },
   { key: 'SMITLINE_OWNER_PHONE', label: 'Your phone number', group: 'Phone calls (optional)', hint: 'Smitline rings it for the test call and when you take over a call. Include the country code, such as +1 415 555 0142.' },
   { key: 'SMITLINE_CALLER_ID', label: 'Show my own number (optional)', group: 'Phone calls (optional)', hint: 'A number you verified with SignalWire or Twilio (Verified Caller IDs). Outgoing calls show it instead of the provider number. Incoming calls still ring the provider number.' },
@@ -662,9 +702,9 @@ export const FIELDS = [
   { key: 'TWILIO_ACCOUNT_SID', label: 'Twilio Account SID', group: 'Twilio (upgraded account)', secret: true, hint: 'Starts with AC. Find it under Account Info on the home page of https://console.twilio.com.' },
   { key: 'TWILIO_AUTH_TOKEN', label: 'Twilio Auth Token', group: 'Twilio (upgraded account)', secret: true, revoke: REVOKE.twilio, hint: 'Next to the Account SID in the Twilio console. Press Show, then copy it.' },
   { key: 'TWILIO_FROM_NUMBER', label: 'Twilio phone number', group: 'Twilio (upgraded account)', hint: 'A number you bought in Twilio. Include the country code, such as +1 415 555 0142.' },
-  { key: 'SMITLINE_PHONE_ENGINE', label: 'Voice for phone calls', group: 'German calls on Claude (optional)', hint: 'claude: Deepgram hears and speaks, Claude answers, for calls to Switzerland (+41) and Germany (+49) in German. Leave it empty for GPT-Live.' },
-  { key: 'ANTHROPIC_API_KEY', label: 'Anthropic API key', group: 'German calls on Claude (optional)', secret: true, hint: 'Starts with sk-ant-. Create one in the Claude Console under API keys.' },
-  { key: 'DEEPGRAM_API_KEY', label: 'Deepgram API key', group: 'German calls on Claude (optional)', secret: true, hint: 'Create one in the Deepgram console under API Keys. Deepgram turns speech into text and text into speech.' },
+  { key: 'OPENAI_API_KEY', label: 'OpenAI API key', group: 'GPT-Live and meetings (optional)', secret: true, revoke: REVOKE.openai, hint: 'Only for calls on GPT-Live or for meetings. Starts with sk-. Create one at https://platform.openai.com/api-keys. The live voice needs billing turned on (a paid API tier).' },
+  { key: 'SMITLINE_PHONE_ENGINE', label: 'Voice for phone calls', group: 'GPT-Live and meetings (optional)', hint: 'Leave it empty for Claude with Deepgram: calls to Switzerland (+41) and Germany (+49), in German. gpt-live: OpenAI’s GPT-Live instead, which needs the OpenAI key.' },
+  { key: 'SMITLINE_MEETINGS', label: 'Meetings', group: 'GPT-Live and meetings (optional)', hint: 'Off unless set to 1. With 1, Smitline also joins Zoom, Teams and Google Meet meetings, which needs the OpenAI key.' },
   { key: 'OPENAI_PROJECT_ID', label: 'OpenAI project ID', group: 'Direct phone audio (advanced)', hint: 'Only for direct audio through an OpenAI webhook (SMITLINE_PHONE_AUDIO=sip-webhook). Settings > Project > General on platform.openai.com; it starts with proj_.' },
   { key: 'OPENAI_WEBHOOK_SECRET', label: 'OpenAI webhook signing secret', group: 'Direct phone audio (advanced)', secret: true, revoke: REVOKE.webhook, hint: 'Shown once when you create the webhook in Settings > Project > Webhooks. It starts with whsec_.' },
   { key: 'SMITLINE_CONNECTOR_URL', label: 'Connector address', group: 'Remote connector (server mode)', hint: 'This server’s public address, starting with https:// and nothing after the name, such as smitline.example.com. See docs/agents.md.' },
@@ -763,14 +803,15 @@ export function renderSecretsPage(saved, action, message = '', options = {}) {
   const { tone = 'info', savedNow = [], errors = [], done = false, finished = false } = options;
   const groupTitles = { Required: 'The basics' };
   const groupHints = {
-    Required: 'Required for every call and meeting.',
+    Required: 'Required for every call.',
+    'GPT-Live and meetings (optional)': 'Calls run on Claude with Deepgram. Fill these in only to call on OpenAI’s GPT-Live instead, or to let Smitline join video meetings.',
     'Phone calls (optional)': 'Skip the phone sections if you only want Smitline in video meetings. For phone calls, add your number here and one provider below. SignalWire has a free trial that works with Smitline; it calls only numbers you verify in SignalWire (up to 10) until you add a card and $5 of credit.',
     'SignalWire (free trial)': 'Sign up free at https://signalwire.com (no card needed). A trial calls only numbers you verify in SignalWire (Phone Numbers > Verified Caller IDs), up to 10, in the US and Canada. Adding $5 lifts that.',
     'Twilio (upgraded account)': "Twilio's free trial blocks the live call audio Smitline needs, so use Twilio only with an upgraded account.",
     'Remote connector (server mode)': 'Only for running Smitline on a server so cloud agents, such as ChatGPT or Claude on the web, can use it. Most people skip this.',
   };
   const isSaved = (field) => present(saved[field.key]);
-  const required = (field) => field.group === 'Required';
+  const required = (field) => requiredField(field, saved);
   // Escaped text with its https links made clickable; links open in a new tab so this page stays open.
   const linked = (text) => escapeHtml(text).replace(/https:\/\/[a-z0-9][^\s<]*[^\s<.,;:)”]/gi, (url) =>
     `<a href="${url}" target="_blank" rel="noopener noreferrer">${url.replace(/^https:\/\//, '')}</a>`);
@@ -925,12 +966,20 @@ export function sanitizeSubmission(form) {
 const REQUIRED_TOGETHER = [
   ['SignalWire', ['SIGNALWIRE_SPACE', 'SIGNALWIRE_PROJECT_ID', 'SIGNALWIRE_API_TOKEN', 'SIGNALWIRE_SIGNING_KEY']],
   ['Twilio', ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN']],
-  ['Claude', ['ANTHROPIC_API_KEY', 'DEEPGRAM_API_KEY']],
 ];
+
+/** Whether the setup page asks for this field before Done: the basics, with the model keys
+ * the chosen voice and meetings need (neededModelKeys). */
+export function requiredField(field, env) {
+  if (['ANTHROPIC_API_KEY', 'DEEPGRAM_API_KEY', 'OPENAI_API_KEY'].includes(field.key)) {
+    return neededModelKeys(env).includes(field.key);
+  }
+  return field.group === 'Required';
+}
 
 export function missingForDone(env) {
   const errors = [];
-  for (const field of FIELDS.filter((f) => f.group === 'Required')) {
+  for (const field of FIELDS.filter((f) => requiredField(f, env))) {
     if (!present(env[field.key])) errors.push(`${field.label} is required`);
   }
   for (const [name, keys] of REQUIRED_TOGETHER) {

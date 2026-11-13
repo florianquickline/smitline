@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -308,6 +309,43 @@ class FakeDaemon:
 
 
 class MeetingLineTests(unittest.IsolatedAsyncioTestCase):
+    async def test_switched_off_meetings_are_refused_before_anything_starts(self):
+        from call_hooks import meetings_on
+        self.assertFalse(meetings_on({}))
+        self.assertFalse(meetings_on({'SMITLINE_MEETINGS': '0'}))
+        self.assertTrue(meetings_on({'SMITLINE_MEETINGS': ' On '}))
+        with tempfile.TemporaryDirectory() as temp:
+            daemon = FakeDaemon()
+            env = {'OPENAI_API_KEY': 'sk-test'}
+            line = MeetingLine(daemon, enabled=lambda: meetings_on(env))
+            h = ServiceHarness(temp, environ=env, lines={'meeting': line})
+            for to in (ZOOM, 'new'):
+                with self.assertRaises(CallError) as refused:
+                    await h.service.create(brief(channel='meeting', to=to))
+                self.assertEqual((refused.exception.status, refused.exception.code),
+                                 (503, 'meetings_off'))
+                self.assertIn('SMITLINE_MEETINGS=1', refused.exception.message)
+            checked = await h.service.check(brief(channel='meeting', to=ZOOM))
+            self.assertFalse(checked['ok'])
+            self.assertEqual(len(checked['problems']), 1)
+            self.assertIn('Meetings are switched off', checked['problems'][0])
+            self.assertEqual(h.store.list(owner='local'), [])
+            env['SMITLINE_MEETINGS'] = '1'  # read on every call: no restart needed
+            record = await h.service.create(brief(channel='meeting', to=ZOOM))
+            self.assertEqual(record['channel'], 'meeting')
+            await h.service.shutdown()
+
+    def test_the_daemon_switches_meetings_off_unless_the_env_turns_them_on(self):
+        from unittest import mock
+        from daemon_main import build_call_service
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.dict(os.environ, {'SMITLINE_MEETINGS': ''}):
+            root = Path(temp)
+            service = build_call_service(root, root / 'data', daemon=None)
+            self.assertFalse(service.lines['meeting'].enabled())
+            (root / '.env').write_text('SMITLINE_MEETINGS=1\n')
+            self.assertTrue(service.lines['meeting'].enabled())  # .env is read on every call
+
     async def test_voice_seconds_stop_when_the_meeting_ends(self):
         # The handoff can take a while to appear after a meeting ends; that is not meeting time.
         with tempfile.TemporaryDirectory() as temp:
@@ -1105,6 +1143,7 @@ class RoomLine(FakeLine):
     """A meeting line that checks what MeetingLine.ready checks, the Daily key among it."""
     channel = 'meeting'
     daemon = None
+    enabled = staticmethod(lambda: True)
     ready = MeetingLine.ready
 
 

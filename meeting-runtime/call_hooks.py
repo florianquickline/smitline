@@ -64,11 +64,21 @@ PHONE_ENGINES = ('gpt-live', 'claude')
 
 
 def phone_engine(env):
-    """Who hears and speaks on phone calls: 'gpt-live' (OpenAI's GPT-Live, the default) or
-    'claude' (Deepgram hears and speaks, Claude answers: calls to Switzerland and Germany, in
-    German). SMITLINE_PHONE_ENGINE picks one."""
+    """Who hears and speaks on phone calls: 'claude' (the default: Deepgram hears and speaks,
+    Claude answers, for calls to Switzerland and Germany in German) or 'gpt-live' (OpenAI's
+    GPT-Live, kept as a fallback). SMITLINE_PHONE_ENGINE picks one."""
     engine = str(env.get('SMITLINE_PHONE_ENGINE') or '').strip().lower()
-    return engine if engine in PHONE_ENGINES else 'gpt-live'
+    return engine if engine in PHONE_ENGINES else 'claude'
+
+
+def meetings_on(env):
+    """Whether Smitline joins meetings: off unless SMITLINE_MEETINGS=1. Calls in German on Claude
+    are the job of this installation; meetings still need OpenAI's GPT-Live."""
+    return str(env.get('SMITLINE_MEETINGS') or '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+MEETINGS_OFF = ('Meetings are switched off on this installation: it places phone calls only. '
+                'Set SMITLINE_MEETINGS=1 to turn them on (they need OPENAI_API_KEY).')
 
 
 def phone_provider(env):

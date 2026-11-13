@@ -11,10 +11,12 @@ from call_brief import NEW_ROOM, BriefIncomplete, CallBrief, person_on_behalf_of
 from call_costs import call_cost, spend, with_cost
 from call_hooks import (
     LOCAL_OWNER, CallRefused, LineNotReady, MissingCredentials, maybe_await, owner_settings,
+    phone_engine,
 )
 from call_result import (
-    DEFAULT_SUMMARY_MODEL, ResponsesSummarizer, SummaryUnavailable, fallback_result,
-    meeting_facts, result_from_handoff, result_without_conversation, transcript_entries,
+    DEFAULT_SUMMARY_MODEL, ClaudeSummarizer, ResponsesSummarizer, SummaryUnavailable,
+    fallback_result, meeting_facts, result_from_handoff, result_without_conversation,
+    transcript_entries,
 )
 from call_requests import (
     CONTEXT_LINES, KINDS, MAX_ASKED_BY, MAX_CONTEXT_LINE, MAX_DETAILS, MAX_REPLY_TEXT,
@@ -262,6 +264,9 @@ class CallService:
         return getattr(self.hooks, 'environ', os.environ)
 
     def _default_summarizer(self, owner):
+        # The summary follows the voice: on Claude, Claude writes it and OpenAI is not needed.
+        if phone_engine(self.environ) == 'claude':
+            return ClaudeSummarizer(self.hooks.credentials(owner, 'anthropic')['apiKey'])
         key = self.hooks.credentials(owner, 'openai')['apiKey']
         model = self.environ.get('SMITLINE_SUMMARY_MODEL') or DEFAULT_SUMMARY_MODEL
         return ResponsesSummarizer(key, model=model)
@@ -1532,7 +1537,8 @@ class CallService:
 
     async def _build_result(self, context, end_reason, usage, handoff):
         record = self.store.get(context.call_id)
-        duration = usage.get('voiceSeconds') or 0
+        # A call on Claude has no GPT-Live seconds: its length is the phone line's.
+        duration = usage.get('voiceSeconds') or usage.get('phoneSeconds') or 0
         transcript = transcript_entries(context.transcript)
         if record['channel'] == 'meeting':
             # A meeting is judged from its transcript like a call; the handoff only stands in

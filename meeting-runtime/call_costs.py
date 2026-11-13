@@ -1,9 +1,10 @@
-"""What a call cost, in US dollars: the phone provider's bill plus OpenAI usage at list prices.
+"""What a call cost, in US dollars: the phone provider's bill plus model usage at list prices.
 
 Phone: the provider's own price for the call once it reports one (Twilio and SignalWire
 fill it in shortly after a call ends). Until then, an estimate from the minutes.
-OpenAI: GPT-Live seconds and model tokens, priced from the tables below. OpenAI does not
-report a price per call, so these amounts are calculated from usage, not billed amounts.
+Models: GPT-Live seconds and OpenAI or Claude tokens, priced from the tables below. Neither
+reports a price per call, so these amounts are calculated from usage, not billed amounts.
+Deepgram, which hears and speaks on calls on Claude, is not priced yet.
 When prices change, update the tables and PRICES_AS_OF; stored calls keep the cost they
 were given when they ended.
 """
@@ -26,6 +27,9 @@ TOKEN_PRICES = {
     'gpt-5.6-terra': (2.00, 0.20, 12.00),
     'gpt-5.6-luna': (0.20, 0.02, 1.20),
     'gpt-5.5': (5.00, 0.50, 30.00),
+    # Anthropic list price on 2026-11-13, for prompts up to 100K tokens (a call stays far
+    # below). Cache writes cost 1.25x the input price but are counted here as plain input.
+    'claude-haiku-5-5': (0.10, 0.01, 0.50),
 }
 WEB_SEARCH_PER_CALL = 0.01
 # Only until the provider reports its price: USD per started minute, US rates, plus a fee

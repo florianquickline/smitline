@@ -53,7 +53,7 @@ def shutdown_grace(env):
 
 def build_call_service(project_root, data_root, daemon, lines=None, gateway_port=None,
                        runtime_root=None):
-    from call_hooks import load_hooks, read_env_file
+    from call_hooks import load_hooks, meetings_on, read_env_file
     from call_notify import WebhookNotifier, load_or_create_secret
     from call_service import CallService
     from call_store import CallStore
@@ -78,7 +78,7 @@ def build_call_service(project_root, data_root, daemon, lines=None, gateway_port
     recordings = Path(runtime_root or (Path(project_root) / 'meeting-runtime'))
     meeting = MeetingLine(daemon, transcript=lambda meeting_id: meeting_transcript(recordings, meeting_id),
                           pieces=lambda meeting_id: meeting_transcript_pieces(recordings, meeting_id),
-                          phone=phone)
+                          phone=phone, enabled=lambda: meetings_on(environ()))
     available = {'meeting': meeting, 'phone': phone}
     available.update(lines or {})
     service = CallService(store, hooks=hooks, lines=available, shutdown_grace=shutdown_grace(startup_env))

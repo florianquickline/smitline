@@ -38,14 +38,16 @@ sequenceDiagram
 
 ## German calls on Claude
 
-With `SMITLINE_PHONE_ENGINE=claude`, outgoing calls run on three parts instead of GPT-Live: Deepgram Nova-3 hears the other person, Claude (Haiku 5.5, on the Anthropic API) answers, and Deepgram Flux speaks. Everything around the voice stays as above: Twilio or SignalWire, pacing, the disclosure check, voicemail, the guardrails, and the result.
+Outgoing calls run on three parts instead of GPT-Live: Deepgram Nova-3 hears the other person, Claude (Haiku 5.5, on the Anthropic API) answers, and Deepgram Flux speaks. This is the default; `SMITLINE_PHONE_ENGINE=gpt-live` puts a call back on GPT-Live, which needs `OPENAI_API_KEY`. Everything around the voice stays as above: Twilio or SignalWire, pacing, the disclosure check, voicemail, the guardrails, and the result.
 
 - **Language.** The number decides: a Swiss number (+41) is heard as Swiss German and answered in Swiss Standard German ("Grüezi", "ss" for "ß", francs) in the voice `flux-leonie-de`; a German number (+49) runs in Standard German in the voice `flux-janine-de`. Any other country is refused before dialing (`unsupported_country`). Claude never answers in dialect, and it is told that the text it reads comes from speech recognition, so it asks back rather than guess.
 - **Turns.** Claude answers once the other person's turn ends (Deepgram reports a pause), and each sentence is spoken as soon as Claude has written it. Smitline's notes to the voice ("time is almost up", "are you still there?", a missing disclosure) reach Claude in German as system messages; the opening rules are in Claude's instructions.
 - **Interruptions.** When the other person talks over the voice with more than "ja", "mhm" or "genau", the voice stops: what they have not heard yet is dropped from the line, and Claude learns which of its words they heard. Its own voice coming back down the line does not count.
 - **Disclosure.** Only what was heard goes into the transcript, and the disclosure check reads the transcript: an opening cut off before "KI-Assistent" is not a disclosure, so the reminder before the goodbye still comes.
-- **Needs.** `ANTHROPIC_API_KEY`, `DEEPGRAM_API_KEY`, and relayed audio (`SMITLINE_PHONE_AUDIO=relay`, the default). A call is refused before dialing (`not_configured`) while a key is missing. The call result is still written by `SMITLINE_SUMMARY_MODEL` with `OPENAI_API_KEY`; without it, the result keeps the transcript and no summary.
-- **Not yet.** Phone menus (`phoneMenus` is refused), requests to your agent (`canDo`: the voice says you will follow up), incoming calls (they stay on GPT-Live), the brief's `voice`, and prices: `usage.backendModel` is `claude-haiku-5-5` with its tokens, but the cost lists it as unpriced and Deepgram is not counted. Goodbyes and voicemail greetings are recognized in English only, so a German call ends by Claude's `end_call`, the time limit, or silence.
+- **Needs.** `ANTHROPIC_API_KEY`, `DEEPGRAM_API_KEY`, and relayed audio (`SMITLINE_PHONE_AUDIO=relay`, the default). A call is refused before dialing (`not_configured`) while a key is missing. No OpenAI key is needed.
+- **Result.** Claude Haiku 5.5 writes the call result too, in the language of the brief, as JSON held to the result's schema. Its tokens are in `usage.summaryTokens`. If it cannot (a missing key, an API error), the result keeps the transcript and says why there is no summary.
+- **Length and cost.** The result's `durationSeconds` is the time the phone line was connected (there are no GPT-Live seconds). Claude's tokens are priced at Anthropic's list price (`claude-haiku-5-5`: $0.10 per million input tokens, $0.01 cached, $0.50 output); Deepgram is not counted yet.
+- **Not yet.** Phone menus (`phoneMenus` is refused), requests to your agent (`canDo`: the voice says you will follow up), incoming calls (they stay on GPT-Live), and the brief's `voice`. Goodbyes and voicemail greetings are recognized in English only, so a German call ends by Claude's `end_call`, the time limit, or silence.
 
 ## Phone menus
 
@@ -149,11 +151,11 @@ Set `SMITLINE_ACCEPT_INBOUND=1`, `SMITLINE_OWNER_NAME`, and optionally `SMITLINE
 | `SMITLINE_VOICE` | `marin` | Default GPT-Live voice for phone calls, and for meetings without `SMITLINE_MEETING_VOICE`; a brief's `voice` wins. `smitline setup voice --set <name>`, or the agent's `update_profile` with `voices`, changes it. |
 | `SMITLINE_MEETING_VOICE` | none | Default GPT-Live voice for meetings, joined by link or by phone (`smitline setup voice --meeting <name>`, or `update_profile`); a brief's `voice` wins. |
 | `SMITLINE_EXTRA_VOICES` | none | Comma-separated voice names to allow beyond the documented ones. |
-| `SMITLINE_PHONE_ENGINE` | `gpt-live` | `claude`: Deepgram hears and speaks, Claude answers, for calls to Switzerland and Germany in German ([German calls on Claude](#german-calls-on-claude)). |
-| `ANTHROPIC_API_KEY`, `DEEPGRAM_API_KEY` | none | Required with `SMITLINE_PHONE_ENGINE=claude`. Enter them on the page from `smitline setup secrets`. |
+| `SMITLINE_PHONE_ENGINE` | `claude` | `claude`: Deepgram hears and speaks, Claude answers, for calls to Switzerland and Germany in German ([German calls on Claude](#german-calls-on-claude)). `gpt-live`: OpenAI's GPT-Live, with `OPENAI_API_KEY`. |
+| `ANTHROPIC_API_KEY`, `DEEPGRAM_API_KEY` | none | Required for calls on Claude. Enter them on the page from `smitline setup secrets`. |
 | `SMITLINE_PHONE_BACKEND_MODEL` | `gpt-5.6-terra` | Responses model behind the voice. |
 | `SMITLINE_PHONE_WEB_SEARCH` | off | `1` adds web search to the backend. |
-| `SMITLINE_SUMMARY_MODEL` | `gpt-5.6-luna` | Model that writes the call result. |
+| `SMITLINE_SUMMARY_MODEL` | `gpt-5.6-luna` | Model that writes the result of a call on GPT-Live. Calls on Claude are summarized by `claude-haiku-5-5`. |
 | `SMITLINE_RECORD_CALLS` | off | `1` records every call and adds a recording notice; without it, only briefs with `record: true` are recorded. |
 | `SMITLINE_LISTEN` | off | `1` lets you listen in on calls and meetings while they run, from the console's **Listen in** button or `GET /v1/calls/{id}/listen`. The people on the call are not told; turn it on only where they agree or the law allows it. Not for direct SIP calls, whose audio never passes through Smitline. |
 | `SMITLINE_VOICEMAIL_MAX_SECONDS` | `60` | At a voicemail, the call hangs up at the latest this many seconds after the greeting's prompt, even if the agent is still talking; `0` turns this off. |
