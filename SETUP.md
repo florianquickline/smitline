@@ -9,7 +9,7 @@ Agent: follow the steps below. Run the commands yourself, say in one short line 
 ## Rules
 
 - **Never ask for keys in the chat.** Keys go on the local setup page, which saves them in Smitline's private data volume. If the user pastes a key into the chat anyway, do not repeat it or write it anywhere; point them to the page.
-- **Let the page do the asking.** The page collects the OpenAI key, the user's name, and, for phone calls, the phone provider's details (SignalWire or Twilio) and the user's phone number. A typical setup needs at most two questions in the chat.
+- **Let the page do the asking.** The page collects the Anthropic and Deepgram keys (calls run on Claude; the OpenAI key only for GPT-Live or meetings), the user's name, and, for phone calls, the phone provider's details (SignalWire or Twilio) and the user's phone number. A typical setup needs at most two questions in the chat.
 - **Don't ask what the status already answers.** When a step has a `suggest`, apply it with `smitline setup set KEY VALUE` and tell the user what you chose.
 - **Make the first call before asking for a restart.** Restarting the agent app ends this conversation, so the test call comes first.
 
@@ -89,11 +89,11 @@ docker exec smitline smitline setup secrets --json
 
 This starts a page on `127.0.0.1`, port 8096 (another free port if that one is busy), and returns its address at once. The container cannot open a browser, so open the address yourself (`open <url>` on macOS, `xdg-open <url>` on Linux, `start <url>` on Windows), or give it to the user. Tell the user:
 
-> I opened a setup page in your browser. Enter your OpenAI API key and your name. If you want phone calls, also add your phone number and your SignalWire details (the free trial works). Press Done when you're finished, then tell me.
+> I opened a setup page in your browser. Enter your Anthropic API key, your Deepgram API key and your name. If you want phone calls, also add your phone number and your SignalWire details (the free trial works). Press Done when you're finished, then tell me.
 
 The page works only on this computer and stays available for an hour; run the command again for a new one.
 
-When the user says they are done, run the status again. GPT-Live needs an OpenAI account with billing on a paid API tier; if the status says the key cannot use `gpt-live-1`, tell the user to add billing at platform.openai.com.
+When the user says they are done, run the status again. Calls run on Claude with Deepgram, so no OpenAI key is needed. Only with `SMITLINE_PHONE_ENGINE=gpt-live` or `SMITLINE_MEETINGS=1` does the status ask for one: GPT-Live needs an OpenAI account with billing on a paid API tier, and if the status says the key cannot use `gpt-live-1`, tell the user to add billing at platform.openai.com.
 
 ### Phone calls: SignalWire (free trial or paid) or Twilio (paid)
 

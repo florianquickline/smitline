@@ -147,6 +147,28 @@ class RuntimeDaemonTests(unittest.IsolatedAsyncioTestCase):
             '/v1/meetings', json=create_payload(**overrides), headers=self.headers())
         return response
 
+    async def test_switched_off_meetings_are_refused_by_the_meeting_api_too(self):
+        from types import SimpleNamespace
+        from meeting_line import MeetingLine
+        supervisor = FakeSupervisor()
+        line = MeetingLine(self.daemon, enabled=lambda: False)
+        app = create_app(root=Path(self.temporary.name) / 'off', auth_token=self.auth,
+                         supervisor=supervisor, clock=self.clock,
+                         call_service=SimpleNamespace(lines={'meeting': line},
+                                                      shutdown=lambda: asyncio.sleep(0)))
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        try:
+            refused = await client.post('/v1/meetings', json=create_payload(), headers=self.headers())
+            self.assertEqual(refused.status, 503)
+            body = await refused.json()
+            self.assertEqual(body['error']['code'], 'meetings_off')
+            self.assertIn('SMITLINE_MEETINGS=1', body['error']['message'])
+            await asyncio.sleep(0.05)
+            self.assertEqual(supervisor.started, [])
+        finally:
+            await client.close()
+
     async def test_auth_missing_wrong_query_and_correct(self):
         self.assertEqual(self.auth_publications, [self.auth])
         created = await self.create()

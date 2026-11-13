@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from call_hooks import DefaultCallHooks, phone_engine
+from call_result import ClaudeSummarizer, ResponsesSummarizer
 from call_locale import STANDARD_GERMAN, SWISS_GERMAN
 from call_service import CallError, CallService
 from call_store import CallStore
@@ -170,6 +171,11 @@ class ClaudeCallTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(usage['backendModel'], 'claude-haiku-5-5')
         self.assertEqual(usage['backendTokens'], {'input': 3600, 'cached': 1600, 'output': 80})
         self.assertEqual(usage['voiceSeconds'], 0)
+        # No GPT-Live seconds: the call lasted as long as the phone line was connected.
+        self.assertEqual(done['result']['durationSeconds'], 40)
+        backend = [item for item in done['cost']['items'] if item['kind'] == 'backend']
+        self.assertEqual(backend[0]['amount'], 0.000256)  # (2000 x 0.10 + 1600 x 0.01 + 80 x 0.50) / 1M
+        self.assertEqual(done['cost']['unpriced'], [])
         events = self.h.service.events(record['id'])
         ended = [e['data'] for e in events if e['type'] == 'call.end_requested']
         self.assertEqual(ended, [{'reason': 'completed'}])
@@ -266,16 +272,30 @@ class ClaudeReadyTests(unittest.IsolatedAsyncioTestCase):
         error = await self.refused(phoneMenus=True)
         self.assertEqual(error.code, 'phone_menus_unavailable')
 
-    async def test_gpt_live_stays_the_default(self):
-        self.h = Harness(self.temp.name, dict(ENV, SMITLINE_PHONE_ENGINE='',
-                                              OPENAI_API_KEY='sk-test'))
-        self.assertEqual(phone_engine(self.h.env), 'gpt-live')
-        self.assertEqual(phone_engine({'SMITLINE_PHONE_ENGINE': ' Claude '}), 'claude')
+    async def test_claude_is_the_default_and_needs_no_openai_key(self):
+        self.h = Harness(self.temp.name, dict(ENV, SMITLINE_PHONE_ENGINE=''))
+        self.assertNotIn('OPENAI_API_KEY', self.h.env)
+        self.assertEqual(phone_engine(self.h.env), 'claude')
+        self.assertEqual(phone_engine({'SMITLINE_PHONE_ENGINE': 'something else'}), 'claude')
         record = await self.h.service.create(brief())
         await until(lambda: self.h.line.session(record['id']))
-        session = self.h.line.session(record['id'])
-        self.assertIs(type(session), PhoneSession)
+        self.assertIsInstance(self.h.line.session(record['id']), ChainPhoneSession)
         await self.h.service.end(record['id'], owner='local')
+        # The summary is written by Claude too, with the Anthropic key.
+        summarizer = CallService(self.h.store, hooks=self.h.hooks, lines={})._default_summarizer('local')
+        self.assertIsInstance(summarizer, ClaudeSummarizer)
+        self.assertEqual(summarizer.model, 'claude-haiku-5-5')
+
+    async def test_gpt_live_is_still_there_on_request(self):
+        self.h = Harness(self.temp.name, dict(ENV, SMITLINE_PHONE_ENGINE=' GPT-Live ',
+                                              OPENAI_API_KEY='sk-test'))
+        self.assertEqual(phone_engine(self.h.env), 'gpt-live')
+        record = await self.h.service.create(brief())
+        await until(lambda: self.h.line.session(record['id']))
+        self.assertIs(type(self.h.line.session(record['id'])), PhoneSession)
+        await self.h.service.end(record['id'], owner='local')
+        summarizer = CallService(self.h.store, hooks=self.h.hooks, lines={})._default_summarizer('local')
+        self.assertIsInstance(summarizer, ResponsesSummarizer)
 
 
 if __name__ == '__main__':

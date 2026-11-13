@@ -1,6 +1,6 @@
 # Architecture
 
-Smitline is a **local-first** runtime that gives any agent phone calls and meetings. The loopback daemon on `127.0.0.1` is the supported path. OpenAI GPT-Live (`gpt-live-1`) does all listening and speaking, except on phone calls with `SMITLINE_PHONE_ENGINE=claude`: there Deepgram hears and speaks and Claude answers, in German, through the voice chain (`chain_live.py`, see [phone calls](phone.md#german-calls-on-claude)). Browser profiles, transcripts, call records, and credentials stay on this computer.
+Smitline is a **local-first** runtime that gives any agent phone calls and meetings. The loopback daemon on `127.0.0.1` is the supported path. On phone calls, Deepgram hears and speaks and Claude answers, in German, through the voice chain (`chain_live.py`, see [phone calls](phone.md#german-calls-on-claude)); Claude also writes the call's result. `SMITLINE_PHONE_ENGINE=gpt-live` hands calls to OpenAI GPT-Live (`gpt-live-1`) instead. Meetings run on GPT-Live and are off unless `SMITLINE_MEETINGS=1`. Browser profiles, transcripts, call records, and credentials stay on this computer.
 
 See [capabilities](capabilities.md) for the meeting platform matrix, [calls](calls.md) for the brief and result, and [phone calls](phone.md) for how a phone call runs.
 

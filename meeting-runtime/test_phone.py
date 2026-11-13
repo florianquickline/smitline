@@ -30,8 +30,9 @@ from twilio_client import (
 
 
 PUBLIC = 'https://abc-123.trycloudflare.com'
+# These tests run calls on GPT-Live; calls on Claude (the default) are in test_chain_calls.
 ENV = {'OPENAI_API_KEY': 'sk-test', 'TWILIO_ACCOUNT_SID': 'AC1', 'TWILIO_AUTH_TOKEN': 'tw-secret',
-       'TWILIO_FROM_NUMBER': '+15005550006'}
+       'TWILIO_FROM_NUMBER': '+15005550006', 'SMITLINE_PHONE_ENGINE': 'gpt-live'}
 
 
 def brief(**overrides):
@@ -864,7 +865,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_readiness(self):
         with tempfile.TemporaryDirectory() as temp:
-            missing = PhoneHarness(temp, env={'OPENAI_API_KEY': 'k'})
+            missing = PhoneHarness(temp, env={'OPENAI_API_KEY': 'k', 'SMITLINE_PHONE_ENGINE': 'gpt-live'})
             with self.assertRaises(CallError) as caught:
                 await missing.service.create(brief())
             self.assertEqual(caught.exception.details['missing'],
@@ -1834,7 +1835,8 @@ class ConnectedTimeTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SignalWireTests(unittest.IsolatedAsyncioTestCase):
-    SW_ENV = {'OPENAI_API_KEY': 'sk-test', 'SIGNALWIRE_SPACE': 'https://Example.signalwire.com/',
+    SW_ENV = {'OPENAI_API_KEY': 'sk-test', 'SMITLINE_PHONE_ENGINE': 'gpt-live',
+              'SIGNALWIRE_SPACE': 'https://Example.signalwire.com/',
               'SIGNALWIRE_PROJECT_ID': 'p-123', 'SIGNALWIRE_API_TOKEN': 'PT-secret',
               'SIGNALWIRE_SIGNING_KEY': 'PSK-signing', 'SIGNALWIRE_FROM_NUMBER': '+15005550199'}
 

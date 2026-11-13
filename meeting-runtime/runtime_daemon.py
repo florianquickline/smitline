@@ -16,7 +16,9 @@ from aiohttp import web
 
 from agent_sessions import MeetingSession, optional_can_do, optional_on_behalf_of, optional_voice
 from call_brief import person_on_behalf_of
-from call_hooks import LOCAL_OWNER, CallRefused, maybe_await, owner_required, owner_settings
+from call_hooks import (
+    LOCAL_OWNER, MEETINGS_OFF, CallRefused, maybe_await, owner_required, owner_settings,
+)
 from context_handoff import ContextHandoff
 from event_store import JsonlEventStore
 from meeting_handoff import MeetingHandoff
@@ -731,6 +733,9 @@ def create_app(
         return payload if name == value else dict(payload, onBehalfOf=name)
 
     async def create_meeting(request):
+        meetings = (getattr(call_service, 'lines', None) or {}).get('meeting')
+        if meetings is not None and not meetings.enabled():
+            raise DaemonError(503, 'meetings_off', MEETINGS_OFF)
         owner = await local_owner(request)
         payload = for_a_person(await read_json(request), owner)
         if payload.get('voice') is None:

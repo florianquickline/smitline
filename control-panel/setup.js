@@ -5,7 +5,8 @@ const state = { token: '', fields: [], status: null, open: null, mode: null, not
 
 // Which checklist line tells whether a saved field works.
 const CHECK_FOR = {
-  OPENAI_API_KEY: 'openai_key', SMITLINE_OWNER_NAME: 'owner_name', SMITLINE_OWNER_PHONE: 'owner_phone',
+  OPENAI_API_KEY: 'openai_key', ANTHROPIC_API_KEY: 'anthropic_key', DEEPGRAM_API_KEY: 'deepgram_key',
+  SMITLINE_OWNER_NAME: 'owner_name', SMITLINE_OWNER_PHONE: 'owner_phone',
   SMITLINE_CALLER_ID: 'caller_id', SIGNALWIRE_FROM_NUMBER: 'caller_id', TWILIO_FROM_NUMBER: 'caller_id',
   SIGNALWIRE_SPACE: 'phone_account', SIGNALWIRE_PROJECT_ID: 'phone_account', SIGNALWIRE_API_TOKEN: 'phone_account',
   SIGNALWIRE_SIGNING_KEY: 'phone_account', TWILIO_ACCOUNT_SID: 'phone_account', TWILIO_AUTH_TOKEN: 'phone_account',

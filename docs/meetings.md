@@ -2,6 +2,8 @@
 
 Smitline joins Zoom, Microsoft Teams, and Google Meet meetings, and Daily rooms, as a participant that listens and speaks, by link or [by phone](#joining-by-phone). An agent starts a meeting the same way as a phone call, and you can also start one by hand in the console.
 
+**Meetings are off unless `SMITLINE_MEETINGS=1`.** This installation places phone calls in German on Claude; meetings still run on OpenAI's GPT-Live and need `OPENAI_API_KEY`. While they are off, a meeting brief (`POST /v1/calls` with `channel: "meeting"`, also `to: "new"` and joining by phone) and `POST /v1/meetings` are refused with `503 meetings_off` before anything starts. Meetings already running are followed to their end. The setting is read on every request, so no restart is needed.
+
 ## Join a meeting from an agent
 
 An agent joins a meeting through the calls API: `start_call` with `channel: "meeting"` and `to` set to the Zoom, Teams, Google Meet, or Daily link. From the CLI:
