@@ -13,7 +13,9 @@ from urllib.parse import urlencode
 
 import aiohttp
 
-from voice_chain import BYTES_PER_MS, ENCODING, MULAW_FRAME_BYTES, SAMPLE_RATE, Heard, frames, texts
+from voice_chain import (
+    BYTES_PER_MS, ENCODING, MULAW_FRAME_BYTES, SAMPLE_RATE, Heard, frames, heard_part, texts,
+)
 
 
 LISTEN_URL = 'wss://api.deepgram.com/v1/listen'
@@ -85,18 +87,6 @@ def voice_for(language):
         raise DeepgramError('unsupported_language',
                             f'Deepgram speaks {", ".join(VOICES)} here, not {language}.')
     return VOICES[language]
-
-
-def heard_part(text, heard_ms, duration_ms):
-    """The words of TEXT heard in HEARD_MS of its DURATION_MS of audio, cut at a word."""
-    text = text.strip()
-    if not duration_ms or heard_ms >= duration_ms:
-        return text if duration_ms else ''
-    cut = round(len(text) * max(heard_ms, 0) / duration_ms)
-    head = text[:cut]
-    if cut < len(text) and not text[cut].isspace():
-        head = head.rsplit(' ', 1)[0] if ' ' in head else ''
-    return head.strip()
 
 
 async def _open(url, api_key, session):
@@ -276,9 +266,24 @@ class DeepgramSynthesizer:
         self.request_id = None
         self.failure = None
 
+    @property
+    def is_open(self):
+        """Whether a reply can go out now. Flux closes a stream that has been idle a while."""
+        return self._ws is not None and not self._ws.closed
+
     async def start(self):
-        self._session, self._own_session, self._ws = await _open(
+        """Open the stream, or open it again once Flux has closed it (see is_open)."""
+        if self._own_session and self._session is not None and self._session.closed:
+            self._session, self._own_session = None, False
+        self._session, own, self._ws = await _open(
             speak_url(self.voice, base=self._url), self._key, self._session)
+        self._own_session = self._own_session or own
+        # Replies and playback offsets belong to one stream.
+        self._reply = self._generating = self._interrupt_answer = None
+        self._waiting.clear()
+        self._replies.clear()
+        self._session_ms = 0
+        self.failure = None
         try:
             hello = _message(await asyncio.wait_for(self._ws.receive(), CONNECT_SECONDS))
         except asyncio.TimeoutError:

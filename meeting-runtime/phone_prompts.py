@@ -323,6 +323,44 @@ def goodbye_cue(brief, text, *, disclosed):
     return f"{text} Before you say goodbye, tell them that you are {brief.on_behalf_of}'s AI assistant."
 
 
+class LiveCues:
+    """What a phone call tells GPT-Live while it runs, in English: GPT-Live speaks the language of
+    the call whatever language its cues are in. claude_prompts.ClaudeCues has the same cues in
+    German for the voice chain."""
+
+    def opening(self, brief, *, inbound, name, recording, calling_owner):
+        return opening_cue(brief, inbound=inbound, name=name, recording=recording,
+                           calling_owner=calling_owner)
+
+    def time_almost_up(self, brief, *, disclosed):
+        return goodbye_cue(brief, 'Time is almost up. Wrap up politely and say goodbye.',
+                           disclosed=disclosed)
+
+    def end_now(self, brief, *, disclosed):
+        return goodbye_cue(brief, 'You need to end the call now. Thank them and say goodbye.',
+                           disclosed=disclosed)
+
+    def still_there(self):
+        return 'Nobody has spoken for a while. Ask if they are still there.'
+
+    def disclosure_reminder(self, brief):
+        return disclosure_reminder(brief)
+
+    def voicemail_disclosure(self, brief):
+        return voicemail_disclosure(brief)
+
+    def hangup_yielded(self):
+        return HANGUP_YIELDED
+
+    def machine_hint(self, brief):
+        return machine_hint(brief)
+
+    def connecting(self, brief):
+        return f'Tell them briefly that you are connecting them with {brief.on_behalf_of} now.'
+
+
+LIVE_CUES = LiveCues()
+
 # Words and phrases that say "AI" in common call languages. The check is a safety
 # net that triggers a spoken reminder, not a guarantee of exact wording.
 AI_MARKERS = ('ai', 'a.i', 'artificial', 'automated', 'ia', 'i.a', 'ki', 'k.i', 'ии', 'एआई')

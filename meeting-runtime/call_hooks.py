@@ -60,6 +60,17 @@ def phone_audio(env):
     return mode if mode in PHONE_AUDIO_MODES else 'relay'
 
 
+PHONE_ENGINES = ('gpt-live', 'claude')
+
+
+def phone_engine(env):
+    """Who hears and speaks on phone calls: 'gpt-live' (OpenAI's GPT-Live, the default) or
+    'claude' (Deepgram hears and speaks, Claude answers: calls to Switzerland and Germany, in
+    German). SMITLINE_PHONE_ENGINE picks one."""
+    engine = str(env.get('SMITLINE_PHONE_ENGINE') or '').strip().lower()
+    return engine if engine in PHONE_ENGINES else 'gpt-live'
+
+
 def phone_provider(env):
     """'twilio' or 'signalwire': SMITLINE_PHONE_PROVIDER, else whichever account is set up."""
     chosen = str(env.get('SMITLINE_PHONE_PROVIDER') or '').strip().lower()
@@ -361,6 +372,12 @@ class DefaultCallHooks:
         if provider == 'openai':
             names = ('OPENAI_API_KEY',)
             values = {'apiKey': env.get('OPENAI_API_KEY', '').strip()}
+        elif provider == 'anthropic':
+            names = ('ANTHROPIC_API_KEY',)
+            values = {'apiKey': env.get('ANTHROPIC_API_KEY', '').strip()}
+        elif provider == 'deepgram':
+            names = ('DEEPGRAM_API_KEY',)
+            values = {'apiKey': env.get('DEEPGRAM_API_KEY', '').strip()}
         elif provider == 'daily':
             # For meetings Smitline starts itself (to: "new"); joining a Daily room needs no key.
             names = ('SMITLINE_DAILY_API_KEY',)

@@ -23,6 +23,15 @@ def run(coro):
     return asyncio.run(asyncio.wait_for(coro, 10))
 
 
+async def until(predicate, timeout=3.0):
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not predicate():
+        if loop.time() > deadline:
+            raise AssertionError('condition not met in time')
+        await asyncio.sleep(0.01)
+
+
 async def serve(path, handler):
     app = web.Application()
     app.router.add_get(path, handler)
@@ -77,8 +86,11 @@ class FakeFlux:
     """Flux speaking: BYTES_PER_CHAR bytes of audio per character, in CHUNK-byte pieces, one
     every DELAY seconds; Interrupt splits the text at the played offset."""
 
-    def __init__(self, *, bytes_per_char=40, chunk=500, delay=0.0, hello=None, status=None):
+    def __init__(self, *, bytes_per_char=40, chunk=500, delay=0.0, hello=None, status=None,
+                 close_after_turn=False):
         self.bytes_per_char = bytes_per_char
+        self.close_after_turn = close_after_turn
+        self.connections = 0
         self.chunk = chunk
         self.delay = delay
         self.hello = hello or {'type': 'Connected', 'request_id': 'req-2',
@@ -94,6 +106,7 @@ class FakeFlux:
             return web.Response(status=self.status)
         self.query = list(request.query.items())
         self.auth = request.headers.get('Authorization')
+        self.connections += 1
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         await ws.send_json(self.hello)
@@ -115,6 +128,8 @@ class FakeFlux:
                                 'audio_duration_ms': duration,
                                 'input_character_count': len(current['text'])})
             turn.update(id=None, text='', task=None)
+            if self.close_after_turn and self.connections == 1:
+                await ws.close()
 
         async for message in ws:
             if message.type != WSMsgType.TEXT:
@@ -390,6 +405,26 @@ class SynthesizerTests(unittest.TestCase):
         self.assertEqual(nothing, [])
         self.assertEqual([m['type'] for m in fake.received],
                          ['Speak', 'Flush', 'Speak', 'Flush', 'Close'])
+
+    def test_a_stream_flux_closed_opens_again_for_the_next_reply(self):
+        # Flux closes a stream that has been idle for a while; a call can be quiet that long.
+        fake = FakeFlux(bytes_per_char=8, close_after_turn=True)
+
+        async def scenario(synthesizer):
+            await synthesizer.start()
+            first = [f async for f in synthesizer.speak('Grüezi.', language='de-CH')]
+            await until(lambda: not synthesizer.is_open)
+            await synthesizer.start()
+            second = [f async for f in synthesizer.speak('Merci vielmal.', language='de-CH')]
+            is_open = synthesizer.is_open
+            await synthesizer.close()
+            return first, second, is_open
+
+        first, second, is_open = self.speak(fake, scenario)
+        self.assertEqual(sum(map(len, first)), len('Grüezi.') * 8)
+        self.assertEqual(sum(map(len, second)), len('Merci vielmal.') * 8)
+        self.assertTrue(is_open)
+        self.assertEqual(fake.connections, 2)
 
     def test_cancel_while_flux_speaks_stops_the_audio_and_says_what_was_heard(self):
         # 40 bytes a character is 5 ms a character; the audio comes slower than it is read.

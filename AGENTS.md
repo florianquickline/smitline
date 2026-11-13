@@ -24,7 +24,7 @@ Agent skills for setup and for placing calls live under [`.agents/skills/`](.age
 
 ## Invariants
 
-- **GPT-Live is the only voice.** Nothing else listens or speaks in a call or meeting.
+- **One voice per call.** GPT-Live does all listening and speaking, except on phone calls with `SMITLINE_PHONE_ENGINE=claude`, where the voice chain does instead (Deepgram hears and speaks, Claude answers; `chain_live.py`). Nothing else listens or speaks in a call or meeting.
 - **Brief in, result out.** Phone calls and meetings start through the calls API and return the same result shape.
 - **Fail closed** on unknown fields, unsupported meeting links, incomplete briefs, and missing configuration.
 - **Local-first:** loopback daemon, gitignored secrets, transcripts, call records, profiles, and context.
