@@ -56,7 +56,7 @@ Before dialing, the daemon checks the number. A refused call never rings, and th
 
 | Check | Code | What happens |
 | --- | --- | --- |
-| Emergency and crisis numbers (911, 112, 999, 988, and others) | `422` (the brief is rejected) | Never dialed, with or without a country code. If someone needs help, call yourself. |
+| Emergency and crisis numbers (911, 112, 999, 988, Switzerland's 144 and 1414, the European 116 numbers, and others) | `422` (the brief is rejected) | Never dialed, with or without a country code. If someone needs help, call yourself. |
 | Premium-rate and satellite numbers (such as +1 900, UK 09 and 087, +881, +882) | `high_cost_number` | Refused unless `SMITLINE_ALLOW_PREMIUM_NUMBERS=1`. |
 | Do-not-call list | `do_not_call` | When someone says "stop calling me" or "take this number off your list", the assistant apologizes and ends the call, the result has `doNotCall: true`, and the number goes on the list in `.smitline/do-not-call.json`. Later calls to it are refused until it is removed: `smitline do-not-call remove +1...`. |
 | Calling hours | `outside_calling_hours` | Calls ring only between 8 AM and 9 PM where the person is (`SMITLINE_CALLING_HOURS`), judged from the number's time zone. A number that spans zones, such as a mobile in Russia or Australia, rings while it is daytime in any of them. A brief with `afterHours: true` skips the check; set it only when the user confirms the person expects a call now. |

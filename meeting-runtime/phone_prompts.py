@@ -346,8 +346,8 @@ def _words(text):
 # A disclosure puts the AI word next to what the speaker is ("AI assistant", "asistente
 # de IA") or after "I'm" ("I'm an AI", "je suis une IA"); AI as a topic does not count.
 ASSISTANT_WORDS = frozenset((
-    'assistant', 'assistante', 'asistente', 'assistente', 'assistent', 'asystent', 'agent', 'agente',
-    'bot', 'chatbot', 'robot', 'receptionist',
+    'assistant', 'assistante', 'asistente', 'assistente', 'assistent', 'assistentin', 'asystent',
+    'agent', 'agente', 'bot', 'chatbot', 'robot', 'receptionist',
 ))
 SELF_WORDS = frozenset(("i'm", 'im', 'am', 'soy', 'suis', 'bin', 'sono', 'sóc', 'sou', 'jestem'))
 FILLER_WORDS = frozenset(('a', 'an', 'just', 'only', 'un', 'una', 'une', 'ein', 'eine', 'um', 'uma'))
@@ -380,10 +380,14 @@ def states_ai(text):
 
 
 def names(text, name):
-    """True when the text says the first word of NAME ("Sam" for "Sam Rivera", "Lee" for "Dr. Lee")."""
+    """True when the text says the first word of NAME ("Sam" for "Sam Rivera", "Lee" for "Dr. Lee"),
+    also in the German genitive without an apostrophe ("Florians KI-Assistent")."""
     _, name_words = _words(name)
     name_words = [w for w in name_words if w not in ('dr', 'mr', 'mrs', 'ms', 'the')] or name_words
-    return not name_words or name_words[0] in _words(text)[1]
+    if not name_words:
+        return True
+    said = _words(text)[1]
+    return name_words[0] in said or f'{name_words[0]}s' in said
 
 
 def discloses(text, name, language=None):
