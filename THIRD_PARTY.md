@@ -26,7 +26,7 @@ The images redistribute these components unchanged. Each keeps its own license; 
 | noVNC 1.5.0 | meeting image, `/usr/share/novnc` | MPL-2.0 for the core library, other files as listed in its `LICENSE.txt` |
 | websockify | meeting image, PyPI | LGPL-3.0 |
 
-The npm dependencies of Mammoth and PDF.js are listed with their licenses in `package-lock.json` and ship in `node_modules`. The Python packages (aiohttp, numpy, and their dependencies) come from PyPI, and the Debian packages (tini, PulseAudio, Xvfb, x11vnc) from Debian bookworm, each under its publisher's license; Debian's copyright files are in `/usr/share/doc`. No model weights are downloaded.
+The npm dependencies of Mammoth and PDF.js are listed with their licenses in `package-lock.json` and ship in `node_modules`. The Python packages (aiohttp, numpy, the Anthropic SDK, and their dependencies) come from PyPI, and the Debian packages (tini, PulseAudio, Xvfb, x11vnc) from Debian bookworm, each under its publisher's license; Debian's copyright files are in `/usr/share/doc`. No model weights are downloaded.
 
 ## Fonts
 
