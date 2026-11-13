@@ -1,7 +1,7 @@
 """Fakes of the voice chain's three parts, for tests: scripted, instant, and keyless."""
 import asyncio
 
-from voice_chain import MULAW_FRAME_BYTES, BrainEvent, frames
+from voice_chain import BYTES_PER_MS, MULAW_FRAME_BYTES, BrainEvent, frames, texts
 
 
 class FakeRecognizer:
@@ -51,7 +51,10 @@ class FakeBrain:
 
 
 class FakeSynthesizer:
-    """Makes BYTES_PER_CHAR bytes of silence per character, in 20 ms frames, until canceled."""
+    """Makes BYTES_PER_CHAR bytes of silence per character, in 20 ms frames, until canceled.
+
+    A reply given as sentences is spoken as they come, joined by spaces, as a provider would.
+    """
 
     SILENCE = b'\xff'
 
@@ -59,18 +62,37 @@ class FakeSynthesizer:
         self.bytes_per_char = bytes_per_char
         self.spoken = []
         self.canceled = False
+        self.started = False
+        self.closed = False
         self._stop = None
+        self._text = ''
+
+    async def start(self):
+        self.started = True
 
     async def speak(self, text, *, language):
-        self.spoken.append((text, language))
         self._stop = stop = asyncio.Event()
-        for frame in frames(self.SILENCE * (len(text) * self.bytes_per_char), MULAW_FRAME_BYTES):
-            if stop.is_set():
-                return
-            yield frame
-            await asyncio.sleep(0)
+        self._text = ''
+        try:
+            async for piece in texts(text):
+                piece = f' {piece}' if self._text and not piece.startswith(' ') else piece
+                self._text += piece
+                for frame in frames(self.SILENCE * (len(piece) * self.bytes_per_char),
+                                    MULAW_FRAME_BYTES):
+                    if stop.is_set():
+                        return
+                    yield frame
+                    await asyncio.sleep(0)
+        finally:
+            self.spoken.append((self._text, language))
 
-    async def cancel(self):
+    async def cancel(self, *, heard_ms=None):
         self.canceled = True
         if self._stop is not None:
             self._stop.set()
+        if heard_ms is None:
+            return None
+        return self._text[:heard_ms * BYTES_PER_MS // self.bytes_per_char]
+
+    async def close(self):
+        self.closed = True

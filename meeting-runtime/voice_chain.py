@@ -9,18 +9,30 @@ Audio on the phone line is G.711 mu-law at 8 kHz, as Twilio's media stream carri
 per sample, 160 bytes per 20 ms frame.
 """
 from dataclasses import dataclass, field
-from typing import AsyncIterator, Optional, Protocol, Sequence, runtime_checkable
+from typing import (
+    AsyncIterable, AsyncIterator, Optional, Protocol, Sequence, Union, runtime_checkable,
+)
 
 
 SAMPLE_RATE = 8000
 ENCODING = 'mulaw'
 MULAW_FRAME_BYTES = SAMPLE_RATE * 20 // 1000
+BYTES_PER_MS = SAMPLE_RATE // 1000
 
 
 def frames(audio, size=MULAW_FRAME_BYTES):
     """Cut audio into frames of SIZE bytes; the last one may be shorter."""
     for start in range(0, len(audio), size):
         yield audio[start:start + size]
+
+
+async def texts(text):
+    """TEXT as pieces: a whole reply is one piece, a stream of sentences is passed through."""
+    if isinstance(text, str):
+        yield text
+        return
+    async for piece in text:
+        yield piece
 
 
 @dataclass(frozen=True)
@@ -105,10 +117,20 @@ class VoiceBrain(Protocol):
 
 @runtime_checkable
 class SpeechSynthesizer(Protocol):
-    """Turns text into mu-law 8 kHz audio for the phone line."""
+    """Turns text into mu-law 8 kHz audio for the phone line, one reply at a time."""
 
-    def speak(self, text: str, *, language: str) -> AsyncIterator[bytes]:
-        """Audio for TEXT, frame by frame, as it is made."""
+    async def start(self) -> None:
+        """Get ready to speak (open the provider's stream for the call)."""
 
-    async def cancel(self) -> None:
-        """Stop the speech in progress; no more audio comes from it."""
+    def speak(self, text: Union[str, AsyncIterable[str]], *,
+              language: str) -> AsyncIterator[bytes]:
+        """Audio for one reply, frame by frame, as it is made. TEXT is the whole reply, or its
+        sentences as the brain writes them, so speech can start on the first one."""
+
+    async def cancel(self, *, heard_ms: Optional[int] = None) -> Optional[str]:
+        """Stop the reply in progress; no more audio comes from it. Given HEARD_MS, how many
+        milliseconds of the reply's audio were played, returns the text that was heard, or None
+        when that cannot be told."""
+
+    async def close(self) -> None:
+        """End the stream."""

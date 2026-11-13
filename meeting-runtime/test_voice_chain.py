@@ -125,6 +125,30 @@ class FakeSynthesizerTests(unittest.TestCase):
         self.assertEqual(len(run(scenario())), 2)
         self.assertTrue(synthesizer.canceled)
 
+    def test_a_reply_can_come_as_sentences_and_cancel_says_what_was_heard(self):
+        synthesizer = FakeSynthesizer(bytes_per_char=8)
+
+        async def written():
+            for sentence in ('Grüezi.', 'Ich bin der KI-Assistent.'):
+                yield sentence
+
+        async def scenario():
+            await synthesizer.start()
+            received = []
+            async for chunk in synthesizer.speak(written(), language='de-CH'):
+                received.append(chunk)
+            heard = await synthesizer.cancel(heard_ms=len('Grüezi. Ich') * 8 // 8)
+            await synthesizer.close()
+            return received, heard
+
+        received, heard = run(scenario())
+        whole = 'Grüezi. Ich bin der KI-Assistent.'
+        self.assertEqual(sum(len(chunk) for chunk in received), len(whole) * 8)
+        self.assertEqual(synthesizer.spoken, [(whole, 'de-CH')])
+        self.assertEqual(heard, 'Grüezi. Ich')
+        self.assertTrue(synthesizer.started and synthesizer.closed)
+        self.assertIsNone(run(FakeSynthesizer().cancel()))
+
 
 if __name__ == '__main__':
     unittest.main()

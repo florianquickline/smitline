@@ -9,6 +9,8 @@
   - `voice_chain.py` defines the three parts that will replace GPT-Live: a speech recognizer, a brain, and a speech synthesizer. `voice_fakes.py` has keyless fakes of each for tests.
   - `claude_prompts.py` writes the German instructions for Claude (formal "Sie", the AI disclosure in the opening, "Grüezi", "ss" and francs on Swiss calls, asking back when the recognizer may have misheard) and cleans its text for speaking (no Markdown, links or emoji).
   - `claude_brain.py` runs the conversation on Claude Haiku 5.5 through the Anthropic API. It streams each answer and hands every sentence to the voice as soon as it is complete, hangs up with `end_call`, and tells Claude what the other person actually heard when they talked over it. When the API fails or Claude declines, the voice apologises, says it is an AI assistant, and hangs up. `requirements-daemon.txt` adds the Anthropic SDK; nothing loads it during calls yet.
+  - `deepgram_voice.py` connects Deepgram, each part over one WebSocket for the whole call. Nova-3 hears the other person in Swiss German (`de-CH`) on +41 calls and in Standard German (`de`) on +49 calls, favours names from the brief, and reports when they start talking and when their turn ends. Flux speaks each reply in telephone audio, with a Swiss voice (Leonie) on +41 calls and a German one (Janine) on +49 calls, starting on the first sentence. When the other person talks over it, it stops and reports which words they heard.
+  - The speech synthesizer interface in `voice_chain.py` takes a reply as one text or as its sentences while they are written, has `start` and `close`, and its `cancel` returns the words that were heard.
 
 ## 0.3.12 — 2026-11-10
 
