@@ -658,6 +658,20 @@ test('status says how call audio travels and what direct SIP still needs', async
   assert.throws(() => validateSetting('SMITLINE_SIP_PASSWORD', 'x'), /secret/);
 });
 
+test('calls on Claude take an engine setting and two secret keys, set together', () => {
+  assert.equal(validateSetting('SMITLINE_PHONE_ENGINE', ' Claude '), 'claude');
+  assert.equal(validateSetting('SMITLINE_PHONE_ENGINE', 'gpt-live'), 'gpt-live');
+  assert.throws(() => validateSetting('SMITLINE_PHONE_ENGINE', 'deepgram'), /gpt-live, claude/);
+  assert.throws(() => validateSetting('ANTHROPIC_API_KEY', 'sk-ant-x'), /secret/);
+  assert.throws(() => validateSetting('DEEPGRAM_API_KEY', 'dg'), /secret/);
+  const base = { OPENAI_API_KEY: 'sk-test', SMITLINE_OWNER_NAME: 'Robin' };
+  assert.deepEqual(missingForDone({ ...base, ANTHROPIC_API_KEY: 'sk-ant-x' }),
+    ['Deepgram API key is required for Claude phone calls']);
+  assert.deepEqual(missingForDone({ ...base, ANTHROPIC_API_KEY: 'sk-ant-x', DEEPGRAM_API_KEY: 'dg' }), []);
+  const form = new URLSearchParams({ ANTHROPIC_API_KEY: ' sk-ant-api03-abc\n', SMITLINE_PHONE_ENGINE: 'claude' });
+  assert.deepEqual(sanitizeSubmission(form), { updates: { SMITLINE_PHONE_ENGINE: 'claude', ANTHROPIC_API_KEY: 'sk-ant-api03-abc' }, errors: [] });
+});
+
 test('profile commands and the new call flags reach the daemon', async (t) => {
   const root = await tempRoot(t);
   await fs.writeFile(path.join(root, '.env'), 'SMITLINE_OWNER_NAME=Robin\n');

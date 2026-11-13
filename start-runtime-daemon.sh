@@ -23,6 +23,11 @@ has_aiohttp() {
   "$1" -c 'import aiohttp' >/dev/null 2>&1
 }
 
+# Everything in requirements-daemon.txt, so a venv from an older checkout picks up new pins.
+has_requirements() {
+  "$1" -c 'import aiohttp, phonenumbers, anthropic' >/dev/null 2>&1
+}
+
 # A venv made without python3-venv installed has python but no pip.
 venv_usable() {
   [[ -x "$VENV/bin/python" ]] && "$VENV/bin/python" -m pip --version >/dev/null 2>&1
@@ -56,7 +61,7 @@ run_on_host() {
       fi
     fi
     PYTHON="$VENV/bin/python"
-    if ! has_aiohttp "$PYTHON"; then
+    if ! has_requirements "$PYTHON"; then
       "$PYTHON" -m pip install -q -r "$REQ"
     fi
   fi

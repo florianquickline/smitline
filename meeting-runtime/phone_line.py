@@ -21,13 +21,16 @@ from call_costs import provider_price_from
 from meeting_lifecycle import (
     GOODBYE_QUIET_SECONDS, machine_prompt, only_closing, says_goodbye, voicemail_prompt,
 )
-from call_hooks import CallRefused
+from call_hooks import CallRefused, phone_engine
 from call_hooks import LineNotReady as NotReady
+from call_locale import call_locale
+from call_policy import PolicyProblem
+from chain_live import open_chain
+from claude_prompts import ClaudeCues
 from phone_keys import KEY_GAP_SECONDS, PAUSE, PAUSE_SECONDS, key_payload, menu_keys, shown_keys
 from phone_prompts import (
-    DEFAULT_BACKEND_MODEL, HANGUP_YIELDED, delegation_config, disclosure_reminder, goodbye_cue,
-    greeting_name, machine_hint, names, opening_cue, states_ai, voice_instructions,
-    voicemail_disclosure,
+    DEFAULT_BACKEND_MODEL, LIVE_CUES, delegation_config, greeting_name, names, states_ai,
+    voice_instructions,
 )
 from briefing import backend_background, contact_for, voice_input, voice_notes
 from call_requests import (
@@ -466,6 +469,8 @@ class PhoneSession:
     # Whether the other side may be a voicemail (its greeting and beep end the call); not on a
     # meeting's phone line (dial_in.py), whose "say your name after the tone" is a bridge's.
     voicemail_possible = True
+    # What the call tells the voice as it runs (the opening, "time is almost up", ...).
+    cues = LIVE_CUES
 
     def __init__(self, line, ctx, *, api_key, twilio, from_number, token, inbound=False,
                  recording=False, owner_phone=None):
@@ -559,15 +564,14 @@ class PhoneSession:
 
     # Configuration -------------------------------------------------------
 
-    def config(self):
-        """The goal leads (voice instructions); background is reference (starting context for
-        the voice, in full for the backend). See briefing.py."""
+    def _callee(self):
+        """Who is called, from the brief or the profile: (settings, profile, contact). Sets the
+        name to greet them by, and whether this is a call to the owner's own phone."""
         env = self.line.environ()
         profile = self.ctx.profile()
         # The brief can name the person; otherwise the profile may know the number.
         contact = self.brief.contact or contact_for(profile, self.brief.to)
         self.greet_name = greeting_name(contact)
-        session = self.brief.session_context
         owner = self.brief.on_behalf_of
         self.calling_owner = (not self.inbound and not self.brief.rehearsal and _same_number(
             owner_settings(self.ctx, env).get('SMITLINE_OWNER_PHONE'), self.brief.to))
@@ -575,6 +579,14 @@ class PhoneSession:
             self.greet_name = greeting_name({'name': owner})
             # They know who is calling: there is no disclosure to check, remind, or report.
             self.disclosed.set()
+        return env, profile, contact
+
+    def config(self):
+        """The goal leads (voice instructions); background is reference (starting context for
+        the voice, in full for the backend). See briefing.py."""
+        env, profile, contact = self._callee()
+        session = self.brief.session_context
+        owner = self.brief.on_behalf_of
         notes = voice_notes(profile, contact, session, owner)
         self.backend_model = env.get('SMITLINE_PHONE_BACKEND_MODEL') or DEFAULT_BACKEND_MODEL
         return session_config(
@@ -667,15 +679,15 @@ class PhoneSession:
             self._trace, self._trace_start = [], time.monotonic()
         # The provider's clock paces the assistant's speech: this computer's may run fast or slow.
         self.provider_clock = ProviderClock()
-        self.pacer = OutputPacer(self._twilio_send, clock=self.provider_clock, trace=self._note)
+        self.pacer = self._new_pacer()
         if self.recording and self.recorder is None:
             try:
                 self.recorder = CallRecorder(self.ctx.recording_path())
             except OSError as error:
                 self.ctx.event('call.recording_failed', detail=str(error)[:200])
-        manager = self.line.live_factory(self.api_key, self.config())
         try:
             try:
+                manager = self._voice_session()
                 live = await asyncio.wait_for(manager.__aenter__(), LIVE_CONNECT_TIMEOUT)
             except Exception as error:
                 self.fail(f'The voice session could not start ({_error_code(error)}).')
@@ -700,6 +712,13 @@ class PhoneSession:
                 await asyncio.wait(list(self._hangups), timeout=5)
             self._write_trace()
             self.finished.set()
+
+    def _new_pacer(self):
+        return OutputPacer(self._twilio_send, clock=self.provider_clock, trace=self._note)
+
+    def _voice_session(self):
+        """The voice for this call, an async context manager: GPT-Live."""
+        return self.line.live_factory(self.api_key, self.config())
 
     def _stream_started(self):
         """The media stream connected: the person is on the line (a meeting joined by phone waits
@@ -1145,8 +1164,8 @@ class PhoneSession:
         self.ctx.disclosure = False
         self.ctx.event('call.disclosure', verified=False)
 
-    def _goodbye_cue(self, text):
-        return goodbye_cue(self.brief, text, disclosed=self.inbound or self.disclosed.is_set())
+    def _disclosed_now(self):
+        return self.inbound or self.disclosed.is_set()
 
     def _owes_disclosure(self):
         """An outgoing call the agent has spoken on has not yet said it is an AI. Never on a call
@@ -1163,7 +1182,8 @@ class PhoneSession:
         if reason == 'voicemail' or not self._owes_disclosure():
             return False
         self._note('disclosure_reminder')
-        await self.live.append('session.instructions.append', disclosure_reminder(self.brief))
+        await self.live.append('session.instructions.append',
+                               self.cues.disclosure_reminder(self.brief))
         try:
             await asyncio.wait_for(self.disclosed.wait(), DISCLOSE_BEFORE_END_SECONDS)
         except asyncio.TimeoutError:
@@ -1180,9 +1200,9 @@ class PhoneSession:
         await self._let_long_greeting_finish()
         await self.live.started.wait()
         await self.live.append('session.commentary.append',
-                               opening_cue(self.brief, inbound=self.inbound, name=self.greet_name,
-                                           recording=self.recording,
-                                           calling_owner=self.calling_owner))
+                               self.cues.opening(self.brief, inbound=self.inbound,
+                                                 name=self.greet_name, recording=self.recording,
+                                                 calling_owner=self.calling_owner))
         self._note('opening_cue')
         await asyncio.Event().wait()
 
@@ -1198,8 +1218,8 @@ class PhoneSession:
             elapsed = now - self.started_at
             if not warned and elapsed >= max(limit - WRAP_UP_SECONDS, limit * 0.8):
                 warned = True
-                await self.live.append('session.commentary.append', self._goodbye_cue(
-                    'Time is almost up. Wrap up politely and say goodbye.'))
+                await self.live.append('session.commentary.append', self.cues.time_almost_up(
+                    self.brief, disclosed=self._disclosed_now()))
             if elapsed >= limit:
                 await self.hangup('max_duration')
                 return
@@ -1213,8 +1233,7 @@ class PhoneSession:
                 return
             if not prompted and quiet >= SILENCE_PROMPT_SECONDS:
                 prompted = True
-                await self.live.append('session.commentary.append',
-                                       'Nobody has spoken for a while. Ask if they are still there.')
+                await self.live.append('session.commentary.append', self.cues.still_there())
             elif quiet < SILENCE_PROMPT_SECONDS:
                 prompted = False
             if quiet >= SILENCE_END_SECONDS:
@@ -1340,7 +1359,8 @@ class PhoneSession:
             in_time = await self._by(deadline, self._let_speech_finish())
             if in_time and self._owes_disclosure():
                 self._note('voicemail_disclosure')
-                await self.live.append('session.instructions.append', voicemail_disclosure(self.brief))
+                await self.live.append('session.instructions.append',
+                                       self.cues.voicemail_disclosure(self.brief))
                 in_time = await self._by(deadline, self._disclosure_heard())
             if not in_time:
                 why = 'time_cap'
@@ -1415,7 +1435,7 @@ class PhoneSession:
                 self.end_reason = None
             self.ctx.event('call.hangup_yielded')
             if self.live is not None:
-                await self.live.append('session.instructions.append', HANGUP_YIELDED)
+                await self.live.append('session.instructions.append', self.cues.hangup_yielded())
             return
         await self._end_call()
 
@@ -1446,7 +1466,7 @@ class PhoneSession:
         self.ctx.event('call.machine_suspected', answeredBy=answered_by)
         if self.live is not None:
             # Silent context: an instruction here made the model announce "I'll wait for the beep".
-            await self.live.append('session.thinking.append', machine_hint(self.brief))
+            await self.live.append('session.thinking.append', self.cues.machine_hint(self.brief))
 
     async def instruct(self, text, *, silent=False):
         """Guidance acts now; a silent note is context the model uses when it helps."""
@@ -1476,8 +1496,8 @@ class PhoneSession:
             # still comes first (one sentence, not a goodbye).
             self._start_hangup('hangup')
             return True
-        await self.live.append('session.commentary.append', self._goodbye_cue(
-            'You need to end the call now. Thank them and say goodbye.'))
+        await self.live.append('session.commentary.append', self.cues.end_now(
+            self.brief, disclosed=self._disclosed_now()))
         if self._pending_hangup is None:
             self._pending_hangup = self._spawn(self._delayed_hangup('hangup', 12.0))
         return True
@@ -1502,9 +1522,7 @@ class PhoneSession:
             self._pending_hangup.cancel()
             self._pending_hangup = None
         if self.live is not None:
-            await self.live.append(
-                'session.commentary.append',
-                f'Tell them briefly that you are connecting them with {self.brief.on_behalf_of} now.')
+            await self.live.append('session.commentary.append', self.cues.connecting(self.brief))
         await asyncio.sleep(1.0)
         await self._let_speech_finish()
         await self._hand_over()
@@ -1518,6 +1536,85 @@ class PhoneSession:
                     'They will get back to you. Goodbye.')
         await self.twilio.update_call(
             self.call_sid, twiml=dial_twiml(self.owner_phone, self.from_number, fallback=fallback))
+
+
+class PacerPlayback:
+    """What of the agent's speech the caller has not heard yet (chain_live.Playback): what the
+    pacer holds, and what the provider was sent but has not played."""
+
+    def __init__(self, session):
+        self.session = session
+
+    def pending(self):
+        pacer = self.session.pacer
+        return pacer is not None and pacer.speech_pending()
+
+    def unplayed_ms(self):
+        pacer = self.session.pacer
+        return int(pacer.unplayed_seconds() * 1000) if pacer is not None else 0
+
+    async def clear(self):
+        pacer = self.session.pacer
+        if pacer is not None:
+            self.session._note('yield', unplayed_ms=self.unplayed_ms())
+            pacer.flush()
+        await self.session._twilio_send({'event': 'clear'})
+
+
+class ChainPhoneSession(PhoneSession):
+    """A call on the voice chain: Deepgram hears, Claude answers, Deepgram speaks (chain_live.py).
+
+    It runs as a GPT-Live call does, with the chain in GPT-Live's place: German cues, the
+    language from the number called (call_locale.py), and the chain, not GPT-Live, decides when
+    to stop for the caller. Claude has no tool to pass requests on (canDo), so the voice says the
+    owner will follow up, as on a call without canDo.
+    """
+
+    # After the pacer is done, how long to wait for the chain to put what was heard into the
+    # transcript (it looks every 50 ms).
+    HEARD_WAIT_SECONDS = 1.0
+
+    def __init__(self, line, ctx, *, keys, **kwargs):
+        super().__init__(line, ctx, api_key=None, **kwargs)
+        self.keys = keys
+        self.locale = call_locale(self.brief.to)
+        self.cues = ClaudeCues(self.locale)
+        self.desk = self.claims = None
+
+    def _voice_session(self):
+        _env, _profile, contact = self._callee()
+        chain = self.line.chain_factory(self.keys, brief=self.brief, locale=self.locale,
+                                        contact=contact, playback=PacerPlayback(self))
+        self.backend_model = getattr(chain, 'model', None)
+        return chain
+
+    def _new_pacer(self):
+        # The voice makes speech faster than it plays, so a long wait is normal: pauses are not
+        # trimmed as for GPT-Live (OutputPacer.most).
+        return OutputPacer(self._twilio_send, clock=self.provider_clock, trace=self._note,
+                           most=math.inf)
+
+    def _maybe_follow_yield(self, heard_at):
+        """The chain itself stops for the caller (chain_live.ChainLive._stops_for)."""
+
+    def _handle_live_event(self, event):
+        if event.get('type') == 'session.output_audio.interrupted':
+            self.stats['interruptionsFollowed'] += 1
+            self.ctx.event('call.interrupted')
+            # Words stopped it, so they spoke now, before their transcript comes: a hang-up
+            # after a goodbye gives way to them (hangup's yield_to_speech).
+            self._other_spoke_at = time.monotonic()
+            self.heard_other.set()
+            return False
+        return super()._handle_live_event(event)
+
+    async def _let_speech_finish(self):
+        await super()._let_speech_finish()
+        if self.live is not None:
+            try:
+                await asyncio.wait_for(self.live.all_heard(), self.HEARD_WAIT_SECONDS)
+            except asyncio.TimeoutError:
+                pass
 
 
 class SipPhoneSession(PhoneSession):
@@ -1697,8 +1794,10 @@ class PhoneLine:
 
     def __init__(self, *, public_url, environ, twilio_factory=None, live_factory=None,
                  status_grace=5.0, public_available=None, connect_timeout=CONNECT_TIMEOUT,
-                 sip_client_factory=None, sideband_factory=None):
-        """public_url: async callable returning the https base URL Twilio can reach."""
+                 sip_client_factory=None, sideband_factory=None, chain_factory=None):
+        """public_url: async callable returning the https base URL Twilio can reach.
+        chain_factory(keys, brief=, locale=, contact=, playback=): the voice chain for a call
+        when SMITLINE_PHONE_ENGINE=claude (chain_live.open_chain)."""
         self._public_url = public_url
         self._public_available = public_available
         self.environ = environ
@@ -1706,15 +1805,27 @@ class PhoneLine:
         self.live_factory = live_factory or (lambda key, config: LiveSession(key, config))
         self.sip_client_factory = sip_client_factory or (lambda key: LiveSipClient(key))
         self.sideband_factory = sideband_factory or (lambda key, session_id: LiveSideband(key, session_id))
+        self.chain_factory = chain_factory or open_chain
         self.status_grace = status_grace
         self.connect_timeout = connect_timeout
         self.gateway_ready = True
         self.sessions = {}
 
+    def on_claude(self):
+        """Whether outgoing calls run on the voice chain (SMITLINE_PHONE_ENGINE=claude)."""
+        return phone_engine(self.environ()) == 'claude'
+
     def ready(self, hooks, owner, brief):
-        hooks.credentials(owner, 'openai')
+        claude = self.on_claude()
+        if claude:
+            hooks.credentials(owner, 'anthropic')
+            hooks.credentials(owner, 'deepgram')
+        else:
+            hooks.credentials(owner, 'openai')
         hooks.credentials(owner, 'twilio')
         mode = hooks.credentials(owner, 'sip')['mode']
+        if claude:
+            self._chain_ready(brief, mode)
         if brief.record and mode != 'relay':
             raise CallRefused('recording_unavailable', 'Recording a call needs '
                               'SMITLINE_PHONE_AUDIO=relay; calls over direct SIP cannot be '
@@ -1728,6 +1839,21 @@ class PhoneLine:
             raise CallRefused('no_public_url', 'Twilio cannot reach this computer. Set '
                               'SMITLINE_PUBLIC_URL, or install cloudflared or Docker for a '
                               'quick tunnel.')
+
+    @staticmethod
+    def _chain_ready(brief, mode):
+        """What a call on Claude needs beyond its keys; refused before dialing otherwise."""
+        if mode != 'relay':
+            raise CallRefused('engine_needs_relay', 'Calls on Claude (SMITLINE_PHONE_ENGINE=claude) '
+                              'need SMITLINE_PHONE_AUDIO=relay: their audio passes through this '
+                              'computer.')
+        if brief.phone_menus:
+            raise CallRefused('phone_menus_unavailable', 'Calls on Claude cannot press keys in a '
+                              'phone menu yet. Leave out phoneMenus, or call on GPT-Live.')
+        try:
+            call_locale(brief.to)
+        except PolicyProblem as problem:
+            raise CallRefused(problem.code, problem.message) from None
 
     async def preflight(self, hooks, owner, brief):
         """For a brief check: whether the provider can reach this computer right now, in words
@@ -1879,15 +2005,22 @@ class PhoneLine:
             return True  # a retried webhook for a call already claimed
         return session.accept_incoming(session_id)
 
+    def _relay_session(self, ctx, twilio, from_number):
+        """The session for an outgoing call relayed through this computer: on GPT-Live, or on
+        the voice chain with SMITLINE_PHONE_ENGINE=claude."""
+        common = dict(twilio=twilio, from_number=from_number, token=secrets.token_urlsafe(24),
+                      recording=self._recording(ctx),
+                      owner_phone=owner_settings(ctx, self.environ()).get('SMITLINE_OWNER_PHONE'))
+        if self.on_claude():
+            keys = {'anthropic': ctx.credentials('anthropic')['apiKey'],
+                    'deepgram': ctx.credentials('deepgram')['apiKey']}
+            return ChainPhoneSession(self, ctx, keys=keys, **common)
+        return PhoneSession(self, ctx, api_key=ctx.credentials('openai')['apiKey'], **common)
+
     async def _start_relay(self, ctx):
-        openai = ctx.credentials('openai')
         twilio_creds = ctx.credentials('twilio')
         twilio = self.twilio_factory(twilio_creds)
-        session = PhoneSession(
-            self, ctx, api_key=openai['apiKey'], twilio=twilio,
-            from_number=twilio_creds['fromNumber'],
-            token=secrets.token_urlsafe(24), recording=self._recording(ctx),
-            owner_phone=owner_settings(ctx, self.environ()).get('SMITLINE_OWNER_PHONE'))
+        session = self._relay_session(ctx, twilio, twilio_creds['fromNumber'])
         self.sessions[ctx.call_id] = session
         try:
             ctx.set_status('connecting')

@@ -26,6 +26,18 @@ def frames(audio, size=MULAW_FRAME_BYTES):
         yield audio[start:start + size]
 
 
+def heard_part(text, heard_ms, duration_ms):
+    """The words of TEXT heard in HEARD_MS of its DURATION_MS of audio, cut at a word."""
+    text = text.strip()
+    if not duration_ms or heard_ms >= duration_ms:
+        return text if duration_ms else ''
+    cut = round(len(text) * max(heard_ms, 0) / duration_ms)
+    head = text[:cut]
+    if cut < len(text) and not text[cut].isspace():
+        head = head.rsplit(' ', 1)[0] if ' ' in head else ''
+    return head.strip()
+
+
 async def texts(text):
     """TEXT as pieces: a whole reply is one piece, a stream of sentences is passed through."""
     if isinstance(text, str):
@@ -108,8 +120,13 @@ class SpeechRecognizer(Protocol):
 class VoiceBrain(Protocol):
     """Decides what to say: the brief, the conversation so far, and tools such as end_call."""
 
-    def reply(self, heard: Optional[str]) -> AsyncIterator[BrainEvent]:
-        """Answer one turn. HEARD is None for the opening, when nobody has spoken yet."""
+    def reply(self, heard: Optional[str], *,
+              note: Optional[str] = None) -> AsyncIterator[BrainEvent]:
+        """Answer one turn. HEARD is what they said, None when they said nothing new: the
+        opening, or a turn the call asks for with NOTE ("time is almost up")."""
+
+    def note(self, text: str) -> None:
+        """Something to know from the next turn on that needs no answer now."""
 
     def interrupted(self, spoken: str) -> None:
         """They talked over the last reply: only SPOKEN reached them, the rest was dropped."""

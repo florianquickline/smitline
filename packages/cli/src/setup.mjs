@@ -14,6 +14,7 @@ import { isManaged } from '../../sdk-typescript/src/index.mjs';
 export const SECRET_KEYS = Object.freeze([
   'OPENAI_API_KEY', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'SIGNALWIRE_API_TOKEN', 'SIGNALWIRE_SIGNING_KEY',
   'SMITLINE_CONNECTOR_PASSPHRASE', 'SMITLINE_SIP_PASSWORD', 'OPENAI_WEBHOOK_SECRET',
+  'ANTHROPIC_API_KEY', 'DEEPGRAM_API_KEY',
 ]);
 export const SETTING_KEYS = Object.freeze([
   'SMITLINE_OWNER_NAME', 'SMITLINE_OWNER_PHONE', 'SMITLINE_VOICE', 'SMITLINE_MEETING_VOICE', 'SMITLINE_CALLER_ID',
@@ -25,9 +26,11 @@ export const SETTING_KEYS = Object.freeze([
   'SIGNALWIRE_SPACE', 'SIGNALWIRE_PROJECT_ID', 'SIGNALWIRE_FROM_NUMBER',
   'SMITLINE_PHONE_AUDIO', 'SMITLINE_SIP_TRUNK_URL', 'SMITLINE_SIP_USERNAME', 'OPENAI_PROJECT_ID',
   'SMITLINE_CALLING_HOURS', 'SMITLINE_MAX_CALLS_PER_NUMBER', 'SMITLINE_MAX_CALLS_PER_HOUR',
-  'SMITLINE_ALLOW_PREMIUM_NUMBERS', 'SMITLINE_MEETING_CAMERA_STYLE',
+  'SMITLINE_ALLOW_PREMIUM_NUMBERS', 'SMITLINE_MEETING_CAMERA_STYLE', 'SMITLINE_PHONE_ENGINE',
 ]);
 export const PHONE_AUDIO_MODES = Object.freeze(['relay', 'sip', 'sip-webhook']);
+// Who hears and speaks on phone calls (call_hooks.phone_engine): GPT-Live, or Deepgram and Claude.
+export const PHONE_ENGINES = Object.freeze(['gpt-live', 'claude']);
 export const CONNECTOR_PASSPHRASE_MIN = 12;
 export const GPT_LIVE_VOICES = Object.freeze([
   'marin', 'vesper', 'quartz', 'ripple', 'willow', 'stone', 'gleam', 'meridian', 'bossa',
@@ -165,6 +168,11 @@ export function validateSetting(key, value, { env = process.env } = {}) {
   }
   if (key === 'SIGNALWIRE_PROJECT_ID' && !/^[A-Za-z0-9-]{8,64}$/.test(text)) {
     throw new Error('SIGNALWIRE_PROJECT_ID must be the Project ID from the API Credentials page, such as 1a2b3c4d-...');
+  }
+  if (key === 'SMITLINE_PHONE_ENGINE') {
+    const engine = text.toLowerCase();
+    if (!PHONE_ENGINES.includes(engine)) throw new Error(`SMITLINE_PHONE_ENGINE must be one of: ${PHONE_ENGINES.join(', ')}`);
+    return engine;
   }
   if (key === 'SMITLINE_PHONE_AUDIO' && !PHONE_AUDIO_MODES.includes(text)) {
     throw new Error(`SMITLINE_PHONE_AUDIO must be one of: ${PHONE_AUDIO_MODES.join(', ')}`);
@@ -654,6 +662,9 @@ export const FIELDS = [
   { key: 'TWILIO_ACCOUNT_SID', label: 'Twilio Account SID', group: 'Twilio (upgraded account)', secret: true, hint: 'Starts with AC. Find it under Account Info on the home page of https://console.twilio.com.' },
   { key: 'TWILIO_AUTH_TOKEN', label: 'Twilio Auth Token', group: 'Twilio (upgraded account)', secret: true, revoke: REVOKE.twilio, hint: 'Next to the Account SID in the Twilio console. Press Show, then copy it.' },
   { key: 'TWILIO_FROM_NUMBER', label: 'Twilio phone number', group: 'Twilio (upgraded account)', hint: 'A number you bought in Twilio. Include the country code, such as +1 415 555 0142.' },
+  { key: 'SMITLINE_PHONE_ENGINE', label: 'Voice for phone calls', group: 'German calls on Claude (optional)', hint: 'claude: Deepgram hears and speaks, Claude answers, for calls to Switzerland (+41) and Germany (+49) in German. Leave it empty for GPT-Live.' },
+  { key: 'ANTHROPIC_API_KEY', label: 'Anthropic API key', group: 'German calls on Claude (optional)', secret: true, hint: 'Starts with sk-ant-. Create one in the Claude Console under API keys.' },
+  { key: 'DEEPGRAM_API_KEY', label: 'Deepgram API key', group: 'German calls on Claude (optional)', secret: true, hint: 'Create one in the Deepgram console under API Keys. Deepgram turns speech into text and text into speech.' },
   { key: 'OPENAI_PROJECT_ID', label: 'OpenAI project ID', group: 'Direct phone audio (advanced)', hint: 'Only for direct audio through an OpenAI webhook (SMITLINE_PHONE_AUDIO=sip-webhook). Settings > Project > General on platform.openai.com; it starts with proj_.' },
   { key: 'OPENAI_WEBHOOK_SECRET', label: 'OpenAI webhook signing secret', group: 'Direct phone audio (advanced)', secret: true, revoke: REVOKE.webhook, hint: 'Shown once when you create the webhook in Settings > Project > Webhooks. It starts with whsec_.' },
   { key: 'SMITLINE_CONNECTOR_URL', label: 'Connector address', group: 'Remote connector (server mode)', hint: 'This server’s public address, starting with https:// and nothing after the name, such as smitline.example.com. See docs/agents.md.' },
@@ -914,6 +925,7 @@ export function sanitizeSubmission(form) {
 const REQUIRED_TOGETHER = [
   ['SignalWire', ['SIGNALWIRE_SPACE', 'SIGNALWIRE_PROJECT_ID', 'SIGNALWIRE_API_TOKEN', 'SIGNALWIRE_SIGNING_KEY']],
   ['Twilio', ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN']],
+  ['Claude', ['ANTHROPIC_API_KEY', 'DEEPGRAM_API_KEY']],
 ];
 
 export function missingForDone(env) {
@@ -933,7 +945,7 @@ export function missingForDone(env) {
 // Account page (control panel) ---------------------------------------------
 
 // The fixed starts of key formats, which say what kind of key is saved and nothing secret.
-const KEY_PREFIXES = ['sk-proj-', 'sk-svcacct-', 'sk-admin-', 'sk-', 'whsec_', 'SWAPI', 'PSK_', 'PT', 'AC'];
+const KEY_PREFIXES = ['sk-proj-', 'sk-svcacct-', 'sk-admin-', 'sk-ant-', 'sk-', 'whsec_', 'SWAPI', 'PSK_', 'PT', 'AC'];
 
 /** A saved secret's known prefix, such as "sk-proj-", or '' for a key with none. Never a random character. */
 export function secretPreview(field, value) {

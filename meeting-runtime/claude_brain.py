@@ -43,6 +43,8 @@ END_CALL_TOOL = {
 
 # The first turn, before anyone has spoken: the API needs a user turn to answer.
 OPENING_TURN = '(Der Anruf ist verbunden. Die Person hat abgenommen und noch nichts gesagt.)'
+# A later turn the call asks for (a note such as "time is almost up") while they said nothing new.
+QUIET_TURN = '(Die Person hat nichts Neues gesagt.)'
 
 # A sentence ends at . ! ? or … before a space, or at a line break; a full stop right after a digit
 # does not end one ("am 1. Mai").
@@ -135,15 +137,25 @@ class ClaudeBrain:
                        'cache_creation_input_tokens': 0}
         self._open_tools = []
         self._interruption = None
+        self._notes = []
 
     def interrupted(self, spoken):
         """They talked over the last reply and heard only SPOKEN; Claude learns it next turn."""
         self._interruption = interruption_note(spoken)
 
-    async def reply(self, heard):
+    def note(self, text):
+        """Context from the call for Claude's next turn, such as a hint that a machine answered."""
+        text = ' '.join(str(text or '').split())
+        if text:
+            self._notes.append(text)
+
+    async def reply(self, heard, *, note=None):
         """Answer one turn: `say` per sentence as it is written, then end_call if Claude hung up,
-        then `done`. Closing the iterator early (an interruption) keeps what was written."""
-        self._add_user_turn(heard)
+        then `done`. Closing the iterator early (an interruption) keeps what was written.
+
+        HEARD is what they said; None for the opening or for a turn the call asks for with NOTE,
+        which Claude reads as a system message after the turn."""
+        self._add_user_turn(heard, note)
         sentences = SentenceSplitter()
         written = []
         message = None
@@ -197,21 +209,24 @@ class ClaudeBrain:
             'messages': self.messages,
         }
 
-    def _add_user_turn(self, heard):
+    def _add_user_turn(self, heard, note=None):
         # A system message must be followed by Claude's turn; if the last turn left none (cut off
         # before Claude wrote anything), the note moves behind the new user turn.
         stranded = None
         if self.messages and self.messages[-1]['role'] == 'system':
             stranded = self.messages.pop()['content']
-        note = self._interruption or stranded
+        opening = not any(turn['role'] == 'assistant' for turn in self.messages)
+        notes = [text for text in (stranded, self._interruption, *self._notes,
+                                   ' '.join(str(note or '').split())) if text]
         content = [{'type': 'tool_result', 'tool_use_id': tool_id, 'content': 'ok'}
                    for tool_id in self._open_tools]
-        content.append({'type': 'text', 'text': heard or OPENING_TURN})
+        content.append({'type': 'text', 'text': heard or (OPENING_TURN if opening else QUIET_TURN)})
         self._open_tools = []
         self._interruption = None
+        self._notes = []
         self.messages.append({'role': 'user', 'content': content})
-        if note is not None:
-            self.messages.append({'role': 'system', 'content': note})
+        if notes:
+            self.messages.append({'role': 'system', 'content': '\n\n'.join(notes)})
 
     def _remember(self, message, written):
         """Add Claude's turn as it came, thinking included; a cut-off turn keeps only its text."""

@@ -10,8 +10,8 @@ import httpx2
 from call_brief import CallBrief
 from call_locale import STANDARD_GERMAN, SWISS_GERMAN
 from claude_brain import (
-    END_CALL_TOOL, END_REASONS, MODEL, OPENING_TURN, ClaudeBrain, SentenceSplitter, failure_code,
-    refusal_line, trouble_line,
+    END_CALL_TOOL, END_REASONS, MODEL, OPENING_TURN, QUIET_TURN, ClaudeBrain, SentenceSplitter,
+    failure_code, refusal_line, trouble_line,
 )
 from claude_prompts import system_prompt
 from phone_prompts import discloses
@@ -333,6 +333,48 @@ class ConversationTests(unittest.TestCase):
                          ['user', 'assistant', 'user', 'user', 'system'])
         self.assertIn('"Grü"', sent[-1]['content'])
 
+
+    def test_a_turn_the_call_asks_for_has_a_quiet_user_turn_and_the_note(self):
+        client = FakeClient(FakeStream(['Grüezi.']), FakeStream(['Sind Sie noch da?']))
+        brain = ClaudeBrain(brief(), SWISS_GERMAN, client=client)
+
+        async def scenario():
+            await collect(brain.reply(None))
+            await collect(brain.reply(None, note='Frag, ob die Person noch da ist.'))
+
+        run(scenario())
+        sent = client.requests[1]['messages']
+        self.assertEqual([turn['role'] for turn in sent], ['user', 'assistant', 'user', 'system'])
+        self.assertEqual(sent[2]['content'], [{'type': 'text', 'text': QUIET_TURN}])
+        self.assertEqual(sent[3]['content'], 'Frag, ob die Person noch da ist.')
+
+    def test_the_opening_can_carry_a_note(self):
+        client = FakeClient(FakeStream(['Hoi Florian.']))
+        brain = ClaudeBrain(brief(), SWISS_GERMAN, client=client)
+        run(collect(brain.reply(None, note='Du rufst Florian Berth selbst an.')))
+        sent = client.requests[0]['messages']
+        self.assertEqual(sent[0]['content'], [{'type': 'text', 'text': OPENING_TURN}])
+        self.assertEqual(sent[1], {'role': 'system', 'content': 'Du rufst Florian Berth selbst an.'})
+
+    def test_quiet_notes_and_an_interruption_come_with_the_next_turn(self):
+        client = FakeClient(FakeStream(['Grüezi.']), FakeStream(['Gut.']))
+        brain = ClaudeBrain(brief(), SWISS_GERMAN, client=client)
+
+        async def scenario():
+            await collect(brain.reply(None))
+            brain.note('Vielleicht hat eine Mailbox abgenommen.')
+            brain.interrupted('Grü')
+            await collect(brain.reply('Hallo?', note='Die Zeit ist fast um.'))
+
+        run(scenario())
+        sent = client.requests[1]['messages']
+        self.assertEqual([turn['role'] for turn in sent], ['user', 'assistant', 'user', 'system'])
+        note = sent[3]['content']
+        self.assertIn('"Grü"', note)
+        self.assertIn('Vielleicht hat eine Mailbox abgenommen.', note)
+        self.assertTrue(note.endswith('Die Zeit ist fast um.'))
+        # Told once: the turn after has no note.
+        self.assertEqual(brain.messages[-1]['role'], 'assistant')
 
 class TroubleTests(unittest.TestCase):
     def test_when_the_api_fails_the_voice_apologises_discloses_and_hangs_up(self):

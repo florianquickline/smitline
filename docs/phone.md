@@ -1,6 +1,6 @@
 # Phone calls
 
-Smitline places phone calls through your SignalWire or Twilio account and talks with GPT-Live-1. Start a call with a brief through `/v1/calls` (see [calls](calls.md)); the result comes back when the call ends.
+Smitline places phone calls through your SignalWire or Twilio account and talks with GPT-Live-1, or, for calls in German, with Deepgram and Claude ([German calls on Claude](#german-calls-on-claude)). Start a call with a brief through `/v1/calls` (see [calls](calls.md)); the result comes back when the call ends.
 
 ## How a call runs
 
@@ -35,6 +35,17 @@ sequenceDiagram
 - **Taking over.** `POST /v1/calls/{id}/transfer` has the agent say it is connecting them, waits for that to finish playing, then dials `SMITLINE_OWNER_PHONE` for 30 seconds. If you do not pick up, the caller hears "Sorry, I could not reach NAME right now. They will get back to you. Goodbye." The call's `endReason` is `transferred`.
 - **Rehearsal.** A brief with `"rehearsal": true` calls `SMITLINE_OWNER_PHONE` and nothing else: `to` defaults to it, and any other number is refused. You play the other party; everything else runs as in the real call.
 - **Recording.** A brief with `"record": true` (CLI `--record`) records that call; `SMITLINE_RECORD_CALLS=1` records every call. Smitline records both sides itself as the audio passes through, from pickup to hang-up: one WAV kept with the call (`recording.wav` in its directory), the other person on the left channel and the voice on the right. The agent says in its first sentence that the call is recorded (several US states require consent before recording), and when the call ends it gets a `recording` field (`seconds`, `format`, `source: "smitline"`). Download it with `smitline calls recording --call-id <id> --out call.wav`, from the call's page in the console, or from `GET /v1/calls/{id}/recording`. The phone provider is not asked to record: SignalWire stopped its recordings when its answering-machine check reported, and they stayed behind the provider's own URLs. Calls recorded before 0.3.3 stay in your Twilio or SignalWire account (delete them there); they download as before, also as MP3 with both sides mixed. Calls over direct SIP cannot be recorded yet. Get everyone's agreement before recording: several places require it.
+
+## German calls on Claude
+
+With `SMITLINE_PHONE_ENGINE=claude`, outgoing calls run on three parts instead of GPT-Live: Deepgram Nova-3 hears the other person, Claude (Haiku 5.5, on the Anthropic API) answers, and Deepgram Flux speaks. Everything around the voice stays as above: Twilio or SignalWire, pacing, the disclosure check, voicemail, the guardrails, and the result.
+
+- **Language.** The number decides: a Swiss number (+41) is heard as Swiss German and answered in Swiss Standard German ("Grüezi", "ss" for "ß", francs) in the voice `flux-leonie-de`; a German number (+49) runs in Standard German in the voice `flux-janine-de`. Any other country is refused before dialing (`unsupported_country`). Claude never answers in dialect, and it is told that the text it reads comes from speech recognition, so it asks back rather than guess.
+- **Turns.** Claude answers once the other person's turn ends (Deepgram reports a pause), and each sentence is spoken as soon as Claude has written it. Smitline's notes to the voice ("time is almost up", "are you still there?", a missing disclosure) reach Claude in German as system messages; the opening rules are in Claude's instructions.
+- **Interruptions.** When the other person talks over the voice with more than "ja", "mhm" or "genau", the voice stops: what they have not heard yet is dropped from the line, and Claude learns which of its words they heard. Its own voice coming back down the line does not count.
+- **Disclosure.** Only what was heard goes into the transcript, and the disclosure check reads the transcript: an opening cut off before "KI-Assistent" is not a disclosure, so the reminder before the goodbye still comes.
+- **Needs.** `ANTHROPIC_API_KEY`, `DEEPGRAM_API_KEY`, and relayed audio (`SMITLINE_PHONE_AUDIO=relay`, the default). A call is refused before dialing (`not_configured`) while a key is missing. The call result is still written by `SMITLINE_SUMMARY_MODEL` with `OPENAI_API_KEY`; without it, the result keeps the transcript and no summary.
+- **Not yet.** Phone menus (`phoneMenus` is refused), requests to your agent (`canDo`: the voice says you will follow up), incoming calls (they stay on GPT-Live), the brief's `voice`, and prices: `usage.backendModel` is `claude-haiku-5-5` with its tokens, but the cost lists it as unpriced and Deepgram is not counted. Goodbyes and voicemail greetings are recognized in English only, so a German call ends by Claude's `end_call`, the time limit, or silence.
 
 ## Phone menus
 
@@ -138,6 +149,8 @@ Set `SMITLINE_ACCEPT_INBOUND=1`, `SMITLINE_OWNER_NAME`, and optionally `SMITLINE
 | `SMITLINE_VOICE` | `marin` | Default GPT-Live voice for phone calls, and for meetings without `SMITLINE_MEETING_VOICE`; a brief's `voice` wins. `smitline setup voice --set <name>`, or the agent's `update_profile` with `voices`, changes it. |
 | `SMITLINE_MEETING_VOICE` | none | Default GPT-Live voice for meetings, joined by link or by phone (`smitline setup voice --meeting <name>`, or `update_profile`); a brief's `voice` wins. |
 | `SMITLINE_EXTRA_VOICES` | none | Comma-separated voice names to allow beyond the documented ones. |
+| `SMITLINE_PHONE_ENGINE` | `gpt-live` | `claude`: Deepgram hears and speaks, Claude answers, for calls to Switzerland and Germany in German ([German calls on Claude](#german-calls-on-claude)). |
+| `ANTHROPIC_API_KEY`, `DEEPGRAM_API_KEY` | none | Required with `SMITLINE_PHONE_ENGINE=claude`. Enter them on the page from `smitline setup secrets`. |
 | `SMITLINE_PHONE_BACKEND_MODEL` | `gpt-5.6-terra` | Responses model behind the voice. |
 | `SMITLINE_PHONE_WEB_SEARCH` | off | `1` adds web search to the backend. |
 | `SMITLINE_SUMMARY_MODEL` | `gpt-5.6-luna` | Model that writes the call result. |
@@ -161,6 +174,6 @@ Calls leave through your provider account under your name. Automated and AI-voic
 
 ## Not yet verified
 
-Automated tests cover the Twilio messages, signatures, pacing, disclosure check, voicemail, transfer, recording, and result paths with fakes, plus a run through real local WebSockets. Real calls through SignalWire with relayed audio have been made since 2026-09-29, to the owner and to other people, and came back with the right result. A call through Twilio has not been verified live yet, and neither has direct SIP (see above). Test with a rehearsal call to your own phone before relying on it.
+Automated tests cover the Twilio messages, signatures, pacing, disclosure check, voicemail, transfer, recording, and result paths with fakes, plus a run through real local WebSockets. Calls on Claude are covered with fake Deepgram and Claude parts and fake Deepgram servers; no real call has run on them yet. Real calls through SignalWire with relayed audio have been made since 2026-09-29, to the owner and to other people, and came back with the right result. A call through Twilio has not been verified live yet, and neither has direct SIP (see above). Test with a rehearsal call to your own phone before relying on it.
 
 [Phone menus](#phone-menus) are covered by tests with fakes. Twilio's tones and direct SIP keys have not been heard by a real menu yet, and waiting on hold is not handled: a long hold can end the call after the assistant's "are you still there?" check-ins.

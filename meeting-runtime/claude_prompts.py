@@ -114,6 +114,75 @@ def _swiss_spelling(text):
     return text.replace('ß', 'ss').replace('ẞ', 'SS')
 
 
+class ClaudeCues:
+    """What a phone call tells Claude while it runs, in German: the same cues as GPT-Live gets
+    (phone_prompts.LiveCues), as system messages for Claude's next turn."""
+
+    def __init__(self, locale):
+        self.locale = locale
+
+    def _text(self, text):
+        return text if self.locale.sharp_s else _swiss_spelling(text)
+
+    def _disclosure_first(self, brief, text, disclosed):
+        if disclosed:
+            return self._text(text)
+        return self._text(f'{text} Sag vor der Verabschiedung, dass du der KI-Assistent von '
+                          f'{brief.on_behalf_of} bist.')
+
+    def opening(self, brief, *, inbound, name, recording, calling_owner):
+        """The opening is in the system prompt; only a call to the owner's own phone differs."""
+        recorded = ' Sag, dass das Gespräch aufgezeichnet wird.' if recording else ''
+        if calling_owner:
+            hello = f' ({name})' if name else ''
+            return self._text(f'Du rufst {brief.on_behalf_of} selbst an. Sag kurz und locker '
+                              f'Hallo{hello}, stell dich nicht vor und sag in wenigen Worten, '
+                              f'worum es geht.{recorded}')
+        if inbound:
+            return self._text(f'Begrüsse die Person: Sie hat den KI-Assistenten von '
+                              f'{brief.on_behalf_of} erreicht.{recorded}')
+        return ''
+
+    def time_almost_up(self, brief, *, disclosed):
+        return self._disclosure_first(
+            brief, 'Die Zeit ist fast um. Komm freundlich zum Schluss und verabschiede dich.',
+            disclosed)
+
+    def end_now(self, brief, *, disclosed):
+        return self._disclosure_first(
+            brief, 'Du musst das Gespräch jetzt beenden. Bedank dich und verabschiede dich.',
+            disclosed)
+
+    def still_there(self):
+        return self._text('Schon eine Weile hat niemand etwas gesagt. Frag, ob die Person noch '
+                          'da ist.')
+
+    def disclosure_reminder(self, brief):
+        who = brief.on_behalf_of
+        return self._text(f'Bevor das Gespräch endet: Du hast noch nicht gesagt, dass du der '
+                          f'KI-Assistent von {who} bist. Sag es jetzt in einem kurzen, natürlichen '
+                          f'Satz, zum Beispiel: "Übrigens, ich bin der KI-Assistent von {who}." '
+                          'Verabschiede dich dann.')
+
+    def voicemail_disclosure(self, brief):
+        who = brief.on_behalf_of
+        return self._text(f'Deine Nachricht auf der Mailbox hat noch nicht gesagt, dass du der '
+                          f'KI-Assistent von {who} bist. Sag nur das jetzt, in einem kurzen Satz, '
+                          f'zum Beispiel: "Hier spricht der KI-Assistent von {who}."')
+
+    def hangup_yielded(self):
+        return self._text('Die Person hat nach deiner Verabschiedung noch etwas gesagt. Hör zu und '
+                          'antworte. Beende das Gespräch erst wieder, wenn es wirklich zu Ende ist.')
+
+    def machine_hint(self, brief):
+        return self._text('Das Telefonnetz vermutet, dass vielleicht ein Gerät abgenommen hat: eine '
+                          'Mailbox oder eine automatische Anrufprüfung. Die Vermutung ist oft '
+                          'falsch, richte dich also nach dem, was du hörst. Erwähne diesen Hinweis '
+                          'nicht.')
+
+    def connecting(self, brief):
+        return self._text(f'Sag kurz, dass du die Person jetzt mit {brief.on_behalf_of} verbindest.')
+
 # Markdown Claude may still write, which a voice would otherwise read out.
 _HEADING = re.compile(r'^\s{0,3}#{1,6}\s*', re.MULTILINE)
 _LIST_MARK = re.compile(r'^\s*(?:[-*+•]|\d{1,3}[.)])\s+', re.MULTILINE)

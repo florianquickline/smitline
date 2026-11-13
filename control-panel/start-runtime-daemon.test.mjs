@@ -19,6 +19,11 @@ test('daemon launcher has valid shell syntax and bootstraps aiohttp from the rep
   const requirements = fs.readFileSync(path.join(ROOT, 'meeting-runtime', 'requirements-daemon.txt'), 'utf8');
   // Any minimum version: Dependabot moves it.
   assert.match(requirements, /^aiohttp>=\d+\.\d+(\.\d+)?$/m);
+  // A venv made before a new pin gets it installed: every requirement is checked.
+  for (const line of requirements.split('\n').filter((entry) => /^[a-z]/i.test(entry))) {
+    const name = line.split(/[<>=]/)[0].trim();
+    assert.ok(script.includes(name), `${name} is checked`);
+  }
 });
 
 test('SMITLINE_PYTHON without aiohttp fails closed before the daemon starts', () => {
