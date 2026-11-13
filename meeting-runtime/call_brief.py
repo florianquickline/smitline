@@ -53,7 +53,14 @@ EMERGENCY_NUMBERS = frozenset({
     '000', '08', '061', '100', '101', '102', '108', '110', '111', '112', '113', '115', '117',
     '118', '119', '122', '123', '125', '133', '150', '155', '190', '191', '192', '193', '197',
     '199', '911', '988', '999', '1122', '10111', '15', '17', '18',
+    # Switzerland: ambulance, Die Dargebotene Hand, poison centre, Pro Juventute, Rega.
+    '143', '144', '145', '147', '1414',
+    # Europe's harmonised 116 numbers: missing children, victims, children and young people,
+    # emotional support, and the medical on-call service in Germany.
+    '116000', '116006', '116111', '116117', '116123',
 })
+# Country codes written before a 116 number ("+49 116117"); the number alone has six digits.
+HARMONISED_PREFIXES = ('41', '43', '49')
 
 QUESTIONS = {
     'channel': 'Should I place a phone call or join a video meeting?',
@@ -101,8 +108,11 @@ class BriefIncomplete(ValueError):
 def emergency_number(value):
     """True for an emergency or crisis short number, written with or without a country code."""
     digits = re.sub(r'\D', '', str(value or ''))
-    if not digits or len(digits) > 6:
+    if not digits:
         return False
+    if len(digits) > 6:
+        return any(digits.startswith(code) and digits[len(code):] in EMERGENCY_NUMBERS
+                   for code in HARMONISED_PREFIXES)
     return any(digits[cut:] in EMERGENCY_NUMBERS for cut in range(0, min(4, len(digits) - 1)))
 
 

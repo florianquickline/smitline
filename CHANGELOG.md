@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Groundwork for German calls with Claude.** The first two points apply to calls today; the new modules are not wired in yet, so calls still run on GPT-Live.
+  - Swiss emergency and crisis numbers (143, 144, 145, 147, 1414) and the European 116 numbers (such as 116117 and 116123) are never dialed, also with +41 or +49 in front. Before, a brief to 144 (the Swiss ambulance) or +49 116117 was accepted.
+  - The AI-disclosure check understands German forms: "Florians KI-Assistent" and "KI-Assistentin".
+  - `call_locale.py` picks the call's language from the number: +41 runs in Swiss German (speech recognition `de-CH`, answers in Swiss Standard German), +49 in Standard German, and any other country is refused.
+  - `voice_chain.py` defines the three parts that will replace GPT-Live: a speech recognizer, a brain, and a speech synthesizer. `voice_fakes.py` has keyless fakes of each for tests.
+  - `claude_prompts.py` writes the German instructions for Claude (formal "Sie", the AI disclosure in the opening, "Grüezi", "ss" and francs on Swiss calls, asking back when the recognizer may have misheard) and cleans its text for speaking (no Markdown, links or emoji).
+
 ## 0.3.12 — 2026-11-10
 
 - **Background noise no longer cuts the voice off on phone calls.** Since 0.1.0 Smitline stopped the voice itself whenever the other person's line got loud: 160 ms of sound paused it and 700 ms dropped the rest of what it was saying. It measured loudness only, so a TV, traffic or people talking near the phone stopped it again and again; recorded calls show up to 44 pauses and 20 dropped replies in one call. GPT-Live tells those apart from someone taking the floor and talks on through them. Now only the model decides: the unheard rest of a reply is dropped once the other person started talking while it was still making speech, it has since made no speech for 0.5 seconds, and it has transcribed words from them. A real interruption now stops the voice about half a second to a second after they start, instead of at once. The local detector still times the opening and the hang-up and tells a quiet line. `usage.audio` drops `pauses`, `backchannels` and `stopDelayMs` and adds `talkedOver`; `interruptionsFollowed` counts the times it stopped for them. See [Phone calls](docs/phone.md).
